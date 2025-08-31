@@ -34,6 +34,15 @@ This integration is built by reverse-engineering the Genesis Energy web portal a
     *   `genesisenergy.backfill_statistics`: A powerful tool to import historical usage data into Home Assistant.
     *   `genesisenergy.force_update`: Trigger an immediate data refresh.
 
+## Installation
+
+### HACS (recommended)
+
+1. [Install HACS](https://www.hacs.xyz/docs/use/download/download/), if you did not already
+2. [![Open your Home Assistant instance and open a repository inside the Home Assistant Community Store.](https://my.home-assistant.io/badges/hacs_repository.svg)](https://my.home-assistant.io/redirect/hacs_repository/?owner=DDahya&repository=ha-genesisenergy&category=integration)
+3. Install the Genesis Energy integration
+4. Restart Home Assistant
+
 ### Manual Installation
 
 1.  Copy the `genesisenergy` folder from this repository into your Home Assistant `custom_components` folder.
