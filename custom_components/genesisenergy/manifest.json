@@ -1,10 +1,9 @@
 {
   "domain": "genesisenergy",
   "name": "Genesis Energy",
-  "codeowners": [
-    "@JoelBrenstrum",
-    "@ddahya"
-  ],
+	"codeowners": [
+		"@DDahya"
+	],
   "config_flow": true,
   "dependencies": [
     "recorder"
