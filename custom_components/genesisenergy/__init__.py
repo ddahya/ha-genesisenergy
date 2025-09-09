@@ -13,17 +13,21 @@ from homeassistant.components.persistent_notification import async_create
 from .const import (
     DOMAIN, PLATFORMS, LOGGER, CONF_EMAIL,
     SERVICE_ADD_POWERSHOUT_BOOKING, ATTR_START_DATETIME, ATTR_DURATION_HOURS,
-    DATA_API_POWERSHOUT_INFO,
+    DATA_API_POWERSHOUT_INFO, DATA_API_POWERSHOUT_OFFERS,
     SERVICE_BACKFILL_STATISTICS, ATTR_DAYS_TO_FETCH, ATTR_FUEL_TYPE,
-    SERVICE_FORCE_UPDATE, DATA_API_BILLING_PLANS
+    SERVICE_FORCE_UPDATE, DATA_API_BILLING_PLANS,
+    SERVICE_ACCEPT_POWERSHOUT_OFFER, ATTR_OFFER_ID
 )
 from .coordinator import GenesisEnergyDataUpdateCoordinator
 from .exceptions import CannotConnect, InvalidAuth
 
-# Schemas remain the same
 SERVICE_SCHEMA_ADD_POWERSHOUT_BOOKING = vol.Schema({
     vol.Required(ATTR_START_DATETIME): cv.datetime,
     vol.Required(ATTR_DURATION_HOURS): vol.All(vol.Coerce(int), vol.Range(min=1, max=4)),
+})
+
+SERVICE_SCHEMA_ACCEPT_POWERSHOUT_OFFER = vol.Schema({
+    vol.Required(ATTR_OFFER_ID): cv.string,
 })
 
 SERVICE_SCHEMA_BACKFILL_STATISTICS = vol.Schema({
@@ -34,7 +38,6 @@ SERVICE_SCHEMA_BACKFILL_STATISTICS = vol.Schema({
 SERVICE_SCHEMA_FORCE_UPDATE = vol.Schema({
     vol.Required(ATTR_FUEL_TYPE): vol.In(["electricity", "gas", "both"]),
 })
-
 
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """Set up Genesis Energy from a config entry."""
@@ -144,11 +147,64 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
                 title="Genesis Energy Power Shout Failed", notification_id="genesis_powershout_error"
             )
 
-
     hass.services.async_register(
         DOMAIN, SERVICE_ADD_POWERSHOUT_BOOKING,
         async_add_powershout_booking_service,
         schema=SERVICE_SCHEMA_ADD_POWERSHOUT_BOOKING,
+    )
+    
+    @callback
+    async def async_accept_powershout_offer_service(call: ServiceCall) -> None:
+        """Handle the service call to accept a Power Shout offer."""
+        offer_id = call.data[ATTR_OFFER_ID]
+        LOGGER.info(f"Attempting to accept Power Shout offer with ID: {offer_id}")
+
+        offers_data = coordinator.data.get(DATA_API_POWERSHOUT_OFFERS)
+        if not offers_data or not isinstance(offers_data.get("activeOffers"), list):
+            LOGGER.error("Could not accept offer: Power Shout offer data is not available.")
+            return
+
+        target_offer = None
+        for offer in offers_data["activeOffers"]:
+            if offer.get("loyaltyOffer", {}).get("guid") == offer_id:
+                target_offer = offer
+                break
+        
+        if not target_offer:
+            LOGGER.error(f"Could not find an active Power Shout offer with ID: {offer_id}")
+            return
+            
+        try:
+            loyalty_account = target_offer['loyaltyAccount']
+            loyalty_offer = target_offer['loyaltyOffer']
+
+            success = await coordinator.api.accept_powershout_offer(
+                loyalty_account_id=loyalty_account.get('id'),
+                member_id=loyalty_account.get('memberGuid'),
+                campaign_offer_id=loyalty_offer.get('guid'),
+                quantity=loyalty_offer.get('amount'),
+                offer_code=target_offer.get('code')
+            )
+
+            if success:
+                LOGGER.info(f"Successfully accepted Power Shout offer: {target_offer.get('name')}")
+                async_create(
+                    hass,
+                    f"Successfully accepted the '{target_offer.get('name')}' offer! {loyalty_offer.get('amount')} hours have been added to your balance.",
+                    title="Genesis Energy Power Shout Offer",
+                    notification_id="genesis_powershout_offer_success"
+                )
+                await coordinator.async_request_refresh()
+            else:
+                LOGGER.error("Failed to accept Power Shout offer. The API call was unsuccessful.")
+
+        except Exception as e:
+            LOGGER.exception(f"An unexpected error occurred while accepting Power Shout offer: {e}")
+
+    hass.services.async_register(
+        DOMAIN, SERVICE_ACCEPT_POWERSHOUT_OFFER,
+        async_accept_powershout_offer_service,
+        schema=SERVICE_SCHEMA_ACCEPT_POWERSHOUT_OFFER,
     )
 
     @callback
@@ -203,6 +259,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     
     def _unload_services():
         hass.services.async_remove(DOMAIN, SERVICE_ADD_POWERSHOUT_BOOKING)
+        hass.services.async_remove(DOMAIN, SERVICE_ACCEPT_POWERSHOUT_OFFER)
         hass.services.async_remove(DOMAIN, SERVICE_BACKFILL_STATISTICS)
         hass.services.async_remove(DOMAIN, SERVICE_FORCE_UPDATE)
     

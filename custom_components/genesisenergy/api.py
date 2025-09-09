@@ -292,6 +292,32 @@ class GenesisEnergyApi:
     async def add_powershout_booking(self, start_date_str: str, duration: int, supply_agreement_id: str, supply_point_id: str, loyalty_account_id: str):
         payload = {"startDate": start_date_str, "supplyAgreementId": supply_agreement_id, "duration": duration, "supplyPointId": supply_point_id, "loyaltyAccountId": loyalty_account_id}
         return await self._make_api_call("POST", "/v2/private/powershoutcurrency/booking/add", json_payload=payload, description="add Power Shout booking", expect_json=False)
+    
+    async def accept_powershout_offer(
+        self,
+        loyalty_account_id: str,
+        member_id: str,
+        campaign_offer_id: str,
+        quantity: int,
+        offer_code: str
+    ) -> bool:
+        """Accepts a Power Shout offer."""
+        payload = {
+            "loyaltyAccountId": loyalty_account_id,
+            "memberId": member_id,
+            "campaignOfferId": campaign_offer_id,
+            "quantity": quantity,
+            "offerCode": offer_code,
+        }
+        response = await self._make_api_call(
+            "POST",
+            "/v2/private/powershoutcurrency/offer/accept",
+            json_payload=payload,
+            description="accept Power Shout offer",
+            expect_json=False
+        )
+        return response.get("status") == 200
+        
     async def get_billing_plans(self):
         return await self._make_api_call("GET", "/v2/private/billing/plans", description="billing plans")
     async def get_widget_property_list(self):

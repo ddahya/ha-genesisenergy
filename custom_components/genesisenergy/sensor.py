@@ -576,7 +576,10 @@ class PowerShoutBalanceSensor(CoordinatorEntity[GenesisEnergyDataUpdateCoordinat
     def extra_state_attributes(self) -> Mapping[str, Any] | None:
         attrs = {};
         if not self.coordinator.data: return None
-        if offers := self.coordinator.data.get(DATA_API_POWERSHOUT_OFFERS, {}): attrs["active_offers_count"] = len(offers.get("activeOffers", []))
+        if offers := self.coordinator.data.get(DATA_API_POWERSHOUT_OFFERS, {}): 
+            attrs["active_offers_count"] = len(offers.get("activeOffers", []))
+            # THIS IS THE FIX - EXPOSE THE LIST OF OFFERS
+            attrs["active_offers"] = offers.get("activeOffers", [])
         if expiring := self.coordinator.data.get(DATA_API_POWERSHOUT_EXPIRING, {}):
             if msg := expiring.get("expiringHoursMessage", {}): attrs["expiring_hours_message"] = msg.get("title")
         if bookings := self.coordinator.data.get(DATA_API_POWERSHOUT_BOOKINGS, {}):
