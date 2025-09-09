@@ -31,6 +31,7 @@ This integration is built by reverse-engineering the Genesis Energy web portal a
     *   A single `sensor.genesis_energy_account_details` entity with a wealth of information in its attributes, including your billing plans, account IDs, and raw data from various dashboard widgets.
 *   **Powerful Services:**
     *   `genesisenergy.add_powershout_booking`: Book your Power Shouts from automations or scripts.
+    *   `genesisenergy.accept_powershout_offer`: Accept any available Power Shout offers.
     *   `genesisenergy.backfill_statistics`: A powerful tool to import historical usage data into Home Assistant.
     *   `genesisenergy.force_update`: Trigger an immediate data refresh.
 
@@ -79,7 +80,7 @@ The underlying statistic IDs created by this integration are:
 
 ## Services
 
-This integration provides three powerful services to manage your account.
+This integration provides four powerful services to manage your account.
 
 ### Service: `genesisenergy.backfill_statistics`
 
@@ -107,6 +108,79 @@ This service is designed to be **safe** and **non-destructive**. It will only ad
 *   The service **cannot** be used to "fix" or "re-import" data for a period that has already been recorded. Its primary purpose is to fill in the past from where your data currently ends.
 *   If you have a gap or corrupted data from a previous version, you must fix it manually using **Developer Tools > Statistics**. The current version of this integration will prevent new corruption from occurring.
 
+### Service: `genesisenergy.accept_powershout_offer`
+
+This service lets you Accept a pending Power Shout offer.
+
+**Example:** Automating Power Shout Acceptance
+You can create a simple and powerful automation that adds a button to your dashboard only when there are Power Shout offers available to be accepted.
+**1.** Create the accept_all_power_shout_offers Script
+This script iterates through all available offers and accepts each one.
+Go to Settings > Automations & Scenes > Scripts.
+Click Add Script and choose Create new script.
+Switch to YAML mode (click the three dots in the top right) and paste the following code:
+
+```
+alias: Accept All Power Shout Offers
+sequence:
+  - condition: template
+    value_template: >-
+      {{ state_attr('sensor.genesis_energy_power_shout_balance',
+      'active_offers_count') > 0 }}
+  - repeat:
+      for_each: >-
+        {{ state_attr('sensor.genesis_energy_power_shout_balance',
+        'active_offers') }}
+      sequence:
+        - service: genesisenergy.accept_powershout_offer
+          data:
+            offer_id: "{{ repeat.item.loyaltyOffer.guid }}"
+        - delay:
+            seconds: 2
+icon: mdi:auto-fix
+description: "Accepts all available Power Shout offers from Genesis Energy."
+```
+**2.** Create a Template Binary Sensor Helper
+This binary sensor will turn 'on' whenever there are offers available, which we can use to show or hide the button.
+Go to Settings > Devices & Services > Helpers.
+Click Create Helper and select Template.
+Choose Binary Sensor.
+Fill in the fields:
+Name: Power Shout Offers Available
+
+State template:
+```
+{{ state_attr('sensor.genesis_energy_power_shout_balance', 'active_offers_count') > 0 }}
+```
+Icon: mdi:gift-outline
+
+Click Submit. This will create the entity binary_sensor.power_shout_offers_available.
+
+**3.** Add a Conditional Button to your Dashboard
+Finally, add this conditional card to your dashboard. It will only display the "Accept" button when the binary sensor you just created is 'on'.
+Open the dashboard you want to add the button to and click Edit Dashboard.
+Click Add Card and choose the Conditional card.
+Configure the card:
+Condition > Entity: binary_sensor.power_shout_offers_available
+Condition > State: on
+Click Add Card to add a card inside the conditional one. Choose the Button card.
+Switch to YAML mode for the button card and paste the following:
+```
+type: conditional
+conditions:
+  - entity: binary_sensor.power_shout_offers_available
+    state: "on"
+card:
+  type: button
+  name: Accept Power Shout Offer(s)
+  icon: mdi:auto-fix
+  tap_action:
+    action: call-service
+    service: script.accept_all_power_shout_offers
+grid_options:
+  columns: 6
+  rows: 2
+```
 
 ### Service: `genesisenergy.add_powershout_booking`
 
