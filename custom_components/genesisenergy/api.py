@@ -194,12 +194,11 @@ class GenesisEnergyApi:
                         else:
                             _LOGGER.error(f"Unexpected status {response.status} during token refresh.")
                         return False
-            # Catch specific network errors first
+
             except aiohttp.ClientError as e:
                 _LOGGER.warning("A network error occurred during token refresh: %s", e)
-                # We raise CannotConnect so the coordinator knows to retry later
                 raise CannotConnect(f"Network error during token refresh: {e}") from e
-            # Catch other unexpected errors
+
             except Exception as e:
                 _LOGGER.exception("An unexpected error occurred during token refresh.")
                 return False
@@ -222,11 +221,8 @@ class GenesisEnergyApi:
                         # If refresh was successful, we're done
                         return
             except CannotConnect:
-                 # If refresh fails due to network, re-raise to stop the update.
-                 # This prevents an immediate, and likely failing, full login attempt.
                 raise
-
-            # If refresh failed for any other reason or was not possible, perform a full login
+                
             if not await self._perform_full_login(): raise CannotConnect("Full login failed.")
             if not (self._token and self._access_token_absolute_expiry_ts > (datetime.now(timezone.utc).timestamp() + self.TOKEN_VALIDITY_BUFFER_MINUTES * 60)): raise InvalidAuth("Token invalid after login.")
 
@@ -351,3 +347,12 @@ class GenesisEnergyApi:
     async def get_generation_mix(self):
         """Gets the generation mix forecast for the next two days."""
         return await self._make_api_call("GET", "/v2/private/generationMix/nextTwoDays", description="generation mix")
+
+    async def get_lpg_order_status(self):
+        """Gets the order status for all LPG supply points."""
+        return await self._make_api_call("GET", "/v2/private/lpg/orderStatus", description="LPG order status")
+
+    async def get_lpg_delivery_history(self, supply_agreement_id: str):
+        """Gets the delivery history for a specific LPG supply point."""
+        params = {"supplyAgreementId": supply_agreement_id}
+        return await self._make_api_call("GET", "/v2/private/lpg/deliveryHistory", params=params, description="LPG delivery history")

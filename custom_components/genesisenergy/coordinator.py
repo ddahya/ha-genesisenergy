@@ -25,7 +25,6 @@ from .const import (
     DATA_API_GENERATION_MIX, DATA_API_EV_PLAN_USAGE, DATA_API_ELECTRICITY_FORECAST,
     DATA_API_USAGE_BREAKDOWN
 )
-# DO NOT import from .sensor here. This is the key to fixing the circular import.
 
 class GenesisEnergyDataUpdateCoordinator(DataUpdateCoordinator[dict[str, any]]):
     config_entry: ConfigEntry; api: GenesisEnergyApi; device_info: DeviceInfo
@@ -69,6 +68,23 @@ class GenesisEnergyDataUpdateCoordinator(DataUpdateCoordinator[dict[str, any]]):
             DATA_API_ELECTRICITY_FORECAST: self.api.get_electricity_forecast(),
             DATA_API_USAGE_BREAKDOWN: self.api.get_usage_breakdown(),
         }
+
+        prelim_results = await asyncio.gather(self.api.get_billing_plans(), return_exceptions=True)
+        billing_plans = prelim_results[0] if not isinstance(prelim_results[0], Exception) else None
+
+        lpg_supply_agreement_ids = []
+        if billing_plans:
+            for site in billing_plans.get("billingAccountSites", []):
+                for sp in site.get("supplyPoints", []):
+                    if sp.get("supplyType") == "lpg":
+                        lpg_supply_agreement_ids.append(sp.get("supplyAgreementId"))
+
+        if lpg_supply_agreement_ids:
+            api_calls[DATA_API_LPG_ORDER_STATUS] = self.api.get_lpg_order_status()
+
+            api_calls[DATA_API_LPG_DELIVERY_HISTORY] = asyncio.gather(
+                *[self.api.get_lpg_delivery_history(sa_id) for sa_id in lpg_supply_agreement_ids]
+            )
 
         results = await asyncio.gather(*api_calls.values(), return_exceptions=True)
         

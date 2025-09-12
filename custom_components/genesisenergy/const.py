@@ -40,6 +40,8 @@ DATA_API_NEXT_BEST_ACTION: Final = "api_next_best_action"
 DATA_API_GENERATION_MIX: Final = "api_generation_mix"
 DATA_API_ELECTRICITY_FORECAST: Final = "api_electricity_forecast"
 DATA_API_USAGE_BREAKDOWN: Final = "api_usage_breakdown"
+DATA_API_LPG_ORDER_STATUS: Final = "api_lpg_order_status"
+DATA_API_LPG_DELIVERY_HISTORY: Final = "api_lpg_delivery_history"
 
 # --- Statistic IDs for Energy Dashboard ---
 STATISTIC_ID_ELECTRICITY_CONSUMPTION: Final = f"{DOMAIN}:electricity_consumption_daily"
@@ -52,6 +54,9 @@ SENSOR_KEY_POWERSHOUT_ELIGIBLE: Final = "powershout_eligible"
 SENSOR_KEY_POWERSHOUT_BALANCE: Final = "powershout_balance"
 SENSOR_KEY_ACCOUNT_DETAILS: Final = "account_details"
 SENSOR_KEY_GENERATION_MIX: Final = "generation_mix"
+SENSOR_KEY_POWERSHOUT_OFFER_AVAILABLE: Final = "powershout_offer_available"
+SENSOR_KEY_LPG_ORDER_STATUS: Final = "lpg_order_status"
+SENSOR_KEY_LPG_DELIVERY_HISTORY: Final = "lpg_delivery_history"
 
 # --- Keys for Billing Sensors ---
 SENSOR_KEY_BILL_ELEC_USED: Final = "bill_electricity_used"
