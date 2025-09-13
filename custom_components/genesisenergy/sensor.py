@@ -36,27 +36,37 @@ from .const import (
     SENSOR_KEY_EV_NIGHT_COST, SENSOR_KEY_EV_TOTAL_SAVINGS,
     DATA_API_ELECTRICITY_FORECAST, SENSOR_KEY_FORECAST_USAGE, SENSOR_KEY_FORECAST_COST,
     DATA_API_USAGE_BREAKDOWN, SENSOR_KEY_BREAKDOWN_APPLIANCES, SENSOR_KEY_BREAKDOWN_ELECTRONICS,
-    SENSOR_KEY_BREAKDOWN_LIGHTING, SENSOR_KEY_BREAKDOWN_OTHER,
-    DATA_API_LPG_ORDER_STATUS, DATA_API_LPG_DELIVERY_HISTORY,
-    SENSOR_KEY_LPG_ORDER_STATUS, SENSOR_KEY_LPG_DELIVERY_HISTORY
+    SENSOR_KEY_BREAKDOWN_LIGHTING, SENSOR_KEY_BREAKDOWN_OTHER, DATA_API_LPG_DETAILS, SENSOR_KEY_LPG_DETAILS,
+    SENSOR_KEY_LPG_ORDER_STATUS, SENSOR_KEY_LPG_DELIVERY_HISTORY, SENSOR_KEY_LPG_DELIVERY_SUMMARY, DATA_API_LPG_ORDER_STATUS,
+    DATA_API_LPG_DELIVERY_HISTORY, DATA_API_LPG_DELIVERY_SUMMARY, DATA_API_LPG_DETAILS
 )
 from .coordinator import GenesisEnergyDataUpdateCoordinator
+
+# This is a helper function to safely convert data to JSON
+def safe_json_dumps(data):
+    def default_serializer(o):
+        return str(o) # Convert any non-serializable object to its string representation
+    return json.dumps(data, indent=2, default=default_serializer)
 
 async def async_setup_entry(hass: HomeAssistant, config_entry: ConfigEntry, async_add_entities: AddEntitiesCallback) -> None:
     coordinator: GenesisEnergyDataUpdateCoordinator = hass.data[DOMAIN][config_entry.entry_id]
     entities = []
     
+    # Check for available services from billing plans
     has_electricity, has_gas = False, False
     billing_plans_data = coordinator.data.get(DATA_API_BILLING_PLANS)
     if billing_plans_data and isinstance(billing_plans_data.get("billingAccountSites"), list):
         for site in billing_plans_data["billingAccountSites"]:
             if isinstance(site.get("supplyPoints"), list):
                 for supply_point in site["supplyPoints"]:
-                    if isinstance(supply_point, dict):
-                        supply_type = supply_point.get("supplyType")
-                        if supply_type == "electricity": has_electricity = True
-                        elif supply_type == "naturalGas": has_gas = True
-    
+                    if not isinstance(supply_point, dict):
+                        continue
+                    supply_type = supply_point.get("supplyType")
+                    if supply_type == "electricity": 
+                        has_electricity = True
+                    elif supply_type == "naturalGas": 
+                        has_gas = True
+
     if has_electricity:
         entities.append(GenesisEnergyStatisticsSensor(coordinator, "Electricity"))
         if coordinator.data.get(DATA_API_GENERATION_MIX):
@@ -75,21 +85,7 @@ async def async_setup_entry(hass: HomeAssistant, config_entry: ConfigEntry, asyn
                 UsageBreakdownSensor(coordinator, "Lighting", SENSOR_KEY_BREAKDOWN_LIGHTING),
                 UsageBreakdownSensor(coordinator, "Other", SENSOR_KEY_BREAKDOWN_OTHER),
             ])
-
-    if lpg_status_data := coordinator.data.get(DATA_API_LPG_ORDER_STATUS):
-        LOGGER.info("LPG data found. Adding LPG sensors.")
-        lpg_history_data = coordinator.data.get(DATA_API_LPG_DELIVERY_HISTORY, [])
         
-        for site in lpg_status_data.get("billingAccountSites", []):
-            for supply_point in site.get("supplyPoints", []):
-                sa_id = supply_point.get("supplyAgreementId")
-                
-                matching_history = next((h for h in lpg_history_data if isinstance(h, dict) and h.get("deliveryHistory") and h.get("deliveryHistory")[0].get("supplyAgreementId") == sa_id), None)
-
-                entities.append(LpgOrderStatusSensor(coordinator, supply_point))
-                if matching_history:
-                    entities.append(LpgDeliveryHistorySensor(coordinator, supply_point, matching_history))
-
     if has_gas:
         entities.append(GenesisEnergyStatisticsSensor(coordinator, "Gas"))
         
@@ -106,7 +102,7 @@ async def async_setup_entry(hass: HomeAssistant, config_entry: ConfigEntry, asyn
     entities.extend([
         PowerShoutEligibilitySensor(coordinator),
         PowerShoutBalanceSensor(coordinator),
-        GenesisEnergyAccountSensor(coordinator)
+        GenesisEnergyAccountSensor(coordinator) # LPG data will be added here
     ])
     
     if coordinator.data.get(DATA_API_WIDGET_SIDEKICK):
@@ -121,8 +117,40 @@ async def async_setup_entry(hass: HomeAssistant, config_entry: ConfigEntry, asyn
     else:
         LOGGER.warning("Sidekick widget data not found. Skipping billing sensors.")
     
+    if coordinator.data.get(DATA_API_LPG_DETAILS):
+        LOGGER.info("LPG details data found. Adding LPG sensor.")
+        entities.append(LPGDetailsSensor(coordinator))
+    
     async_add_entities(entities)
 
+class LPGDetailsSensor(CoordinatorEntity[GenesisEnergyDataUpdateCoordinator], SensorEntity):
+    """Single sensor exposing all LPG details."""
+
+    _attr_has_entity_name = True
+    _attr_icon = "mdi:gas-cylinder"
+
+    def __init__(self, coordinator: GenesisEnergyDataUpdateCoordinator):
+        super().__init__(coordinator)
+        self.entity_description = SensorEntityDescription(
+            key=SENSOR_KEY_LPG_DETAILS,
+            name="LPG Details"
+        )
+        self._attr_device_info = coordinator.device_info
+        self._attr_unique_id = f"{coordinator.config_entry.entry_id}_{SENSOR_KEY_LPG_DETAILS}"
+
+    @property
+    def native_value(self) -> str:
+        return dt_util.utcnow().isoformat() if self.coordinator.last_update_success else "error"
+
+    @property
+    def extra_state_attributes(self) -> Mapping[str, Any] | None:
+        if not self.coordinator.data:
+            return None
+        if (data := self.coordinator.data.get(DATA_API_LPG_DETAILS)) is None:
+            return None
+        if isinstance(data, (dict, list)):
+            return {"data": safe_json_dumps(data)}
+        return {"data": data}
 
 class GenesisEnergyStatisticsSensor(CoordinatorEntity[GenesisEnergyDataUpdateCoordinator], SensorEntity):
     _attr_has_entity_name = True; _attr_should_poll = False
@@ -600,104 +628,63 @@ class PowerShoutBalanceSensor(CoordinatorEntity[GenesisEnergyDataUpdateCoordinat
         return attrs
 class GenesisEnergyAccountSensor(CoordinatorEntity[GenesisEnergyDataUpdateCoordinator], SensorEntity):
     _attr_has_entity_name = True
+
     def __init__(self, coordinator: GenesisEnergyDataUpdateCoordinator):
-        super().__init__(coordinator); self._attr_device_info = coordinator.device_info; self.entity_description = SensorEntityDescription(key=SENSOR_KEY_ACCOUNT_DETAILS, name="Account Details", icon="mdi:account-details"); self._attr_unique_id = f"{coordinator.config_entry.entry_id}_{self.entity_description.key}"
-    @property
-    def native_value(self) -> str: return dt_util.utcnow().isoformat() if self.coordinator.last_update_success else "error"
-    @property
-    def extra_state_attributes(self) -> Mapping[str, Any] | None:
-        if not self.coordinator.data: return None
-        attribute_keys = [DATA_API_BILLING_PLANS, DATA_API_WIDGET_HERO, DATA_API_WIDGET_BILLS, DATA_API_WIDGET_PROPERTY_LIST, DATA_API_WIDGET_PROPERTY_SWITCHER, DATA_API_WIDGET_SIDEKICK, DATA_API_WIDGET_DASHBOARD_POWERSHOUT, DATA_API_WIDGET_ECO_TRACKER, DATA_API_WIDGET_DASHBOARD_LIST, DATA_API_WIDGET_ACTION_TILE_LIST, DATA_API_NEXT_BEST_ACTION]
-        attrs = {}; [attrs.update({key.replace("api_", ""): data}) for key in attribute_keys if (data := self.coordinator.data.get(key)) is not None]
-        return {k: (json.dumps(v, indent=2) if isinstance(v, (dict, list)) else v) for k, v in attrs.items()}
-    
-class LpgOrderStatusSensor(CoordinatorEntity[GenesisEnergyDataUpdateCoordinator], SensorEntity):
-    """Sensor for LPG order status."""
-    _attr_has_entity_name = True
-    _attr_icon = "mdi:truck-delivery"
-
-    def __init__(self, coordinator: GenesisEnergyDataUpdateCoordinator, supply_point_data: dict):
         super().__init__(coordinator)
-        self._supply_point_id = supply_point_data.get("id")
-        # Extract last 4 chars of ICP for a unique-ish name
-        icp_suffix = self._supply_point_id[-4:]
-        self._attr_name = f"LPG Order Status {icp_suffix}"
-        self._attr_unique_id = f"{coordinator.config_entry.entry_id}_{SENSOR_KEY_LPG_ORDER_STATUS}_{self._supply_point_id}"
         self._attr_device_info = coordinator.device_info
+        self.entity_description = SensorEntityDescription(
+            key=SENSOR_KEY_ACCOUNT_DETAILS,
+            name="Account Details",
+            icon="mdi:account-details"
+        )
+        self._attr_unique_id = f"{coordinator.config_entry.entry_id}_{self.entity_description.key}"
 
     @property
-    def _order_data(self) -> dict | None:
-        """Find the specific order data for this sensor."""
-        data = self.coordinator.data.get(DATA_API_LPG_ORDER_STATUS)
-        if data:
-            for site in data.get("billingAccountSites", []):
-                for sp in site.get("supplyPoints", []):
-                    if sp.get("id") == self._supply_point_id:
-                        # Return the first (most recent) order
-                        return sp.get("orders", [None])[0]
-        return None
-
-    @property
-    def state(self) -> str | None:
-        if order := self._order_data:
-            return order.get("statusInfo")
-        return "No order information"
+    def native_value(self) -> str:
+        return dt_util.utcnow().isoformat() if self.coordinator.last_update_success else "error"
 
     @property
     def extra_state_attributes(self) -> Mapping[str, Any] | None:
-        if order := self._order_data:
-            return {
-                "estimated_delivery_date": order.get("estimatedDeliveryDate"),
-                "bottle_size": order.get("bottleSize"),
-                "number_of_bottles": order.get("numberOfBottles"),
-                "reference_number": order.get("referenceNumber"),
-                "order_created": order.get("orderCreated"),
-                "status": order.get("status"),
-            }
-        return None
+        if not self.coordinator.data:
+            LOGGER.debug("[Account Sensor] Coordinator data is not available.")
+            return None
 
-class LpgDeliveryHistorySensor(CoordinatorEntity[GenesisEnergyDataUpdateCoordinator], SensorEntity):
-    """Sensor for LPG delivery history."""
-    _attr_has_entity_name = True
-    _attr_icon = "mdi:gas-cylinder"
+        attribute_keys = [
+            DATA_API_BILLING_PLANS,
+            DATA_API_WIDGET_HERO,
+            DATA_API_WIDGET_BILLS,
+            DATA_API_WIDGET_PROPERTY_LIST,
+            DATA_API_WIDGET_PROPERTY_SWITCHER,
+            DATA_API_WIDGET_SIDEKICK,
+            DATA_API_WIDGET_DASHBOARD_POWERSHOUT,
+            DATA_API_WIDGET_ECO_TRACKER,
+            DATA_API_WIDGET_DASHBOARD_LIST,
+            DATA_API_WIDGET_ACTION_TILE_LIST,
+            DATA_API_NEXT_BEST_ACTION,
+        ]
 
-    def __init__(self, coordinator: GenesisEnergyDataUpdateCoordinator, supply_point_data: dict, history_data: dict):
-        super().__init__(coordinator)
-        self._supply_point_id = supply_point_data.get("id")
-        self._supply_agreement_id = supply_point_data.get("supplyAgreementId")
-        icp_suffix = self._supply_point_id[-4:]
-        self._attr_name = f"LPG Last Delivery {icp_suffix}"
-        self._attr_unique_id = f"{coordinator.config_entry.entry_id}_{SENSOR_KEY_LPG_DELIVERY_HISTORY}_{self._supply_point_id}"
-        self._attr_device_info = coordinator.device_info
-        
-    @property
-    def _history_data(self) -> dict | None:
-        """Find the specific history data for this sensor."""
-        all_histories = self.coordinator.data.get(DATA_API_LPG_DELIVERY_HISTORY, [])
-        for history in all_histories:
-            if isinstance(history, dict) and history.get("deliveryHistory") and history["deliveryHistory"][0].get("supplyAgreementId") == self._supply_agreement_id:
-                return history
-        return None
+        attrs = {}
+        for key in attribute_keys:
+            attr_name = key.replace("api_", "")
+            data = self.coordinator.data.get(key)
+            LOGGER.debug(f"[Account Sensor] Checking for key '{key}'. Found data: {data is not None}")
 
-    @property
-    def _order_data(self) -> dict | None:
-        """Find the specific order data for this sensor."""
-        data = self.coordinator.data.get(DATA_API_LPG_ORDER_STATUS)
-        if data:
-            for site in data.get("billingAccountSites", []):
-                for sp in site.get("supplyPoints", []):
-                    if sp.get("id") == self._supply_point_id:
-                        return sp.get("orders", [None])[0]
-        return None
-        
-    @property
-    def state(self) -> str | None:
-        if order := self._order_data:
-            return order.get("lastOrderMessage")
-        return "No delivery information"
+            if data is None:
+                continue
 
-    @property
-    def extra_state_attributes(self) -> Mapping[str, Any] | None:
-        if history := self._history_data:
-            return {"delivery_history": history.get("deliveryHistory")}
-        return None
+            # Always dump to JSON so everything looks consistent
+            if isinstance(data, (dict, list)):
+                dumped = safe_json_dumps(data)
+                size_bytes = len(dumped.encode("utf-8"))
+                if size_bytes > 15000:
+                    LOGGER.warning(
+                        "[Account Sensor] Attribute '%s' is large (%d bytes) and may be rejected by recorder.",
+                        attr_name,
+                        size_bytes,
+                    )
+                attrs[attr_name] = dumped
+            else:
+                attrs[attr_name] = data
+
+        LOGGER.debug("[Account Sensor] Final attributes before serialization: %s", attrs.keys())
+        return attrs

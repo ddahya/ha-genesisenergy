@@ -42,6 +42,9 @@ DATA_API_ELECTRICITY_FORECAST: Final = "api_electricity_forecast"
 DATA_API_USAGE_BREAKDOWN: Final = "api_usage_breakdown"
 DATA_API_LPG_ORDER_STATUS: Final = "api_lpg_order_status"
 DATA_API_LPG_DELIVERY_HISTORY: Final = "api_lpg_delivery_history"
+DATA_API_LPG_DELIVERY_SUMMARY: Final = "api_lpg_delivery_summary"
+DATA_API_LPG_DETAILS = "api_lpg_details"
+SENSOR_KEY_LPG_DETAILS = "lpg_details"
 
 # --- Statistic IDs for Energy Dashboard ---
 STATISTIC_ID_ELECTRICITY_CONSUMPTION: Final = f"{DOMAIN}:electricity_consumption_daily"
@@ -55,8 +58,12 @@ SENSOR_KEY_POWERSHOUT_BALANCE: Final = "powershout_balance"
 SENSOR_KEY_ACCOUNT_DETAILS: Final = "account_details"
 SENSOR_KEY_GENERATION_MIX: Final = "generation_mix"
 SENSOR_KEY_POWERSHOUT_OFFER_AVAILABLE: Final = "powershout_offer_available"
+SENSOR_KEY_LPG_DETAILS: Final = "lpg_details"
+
+# --- New LPG Sensor Keys ---
 SENSOR_KEY_LPG_ORDER_STATUS: Final = "lpg_order_status"
 SENSOR_KEY_LPG_DELIVERY_HISTORY: Final = "lpg_delivery_history"
+SENSOR_KEY_LPG_DELIVERY_SUMMARY: Final = "lpg_delivery_summary"
 
 # --- Keys for Billing Sensors ---
 SENSOR_KEY_BILL_ELEC_USED: Final = "bill_electricity_used"

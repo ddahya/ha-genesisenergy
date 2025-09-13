@@ -354,5 +354,15 @@ class GenesisEnergyApi:
 
     async def get_lpg_delivery_history(self, supply_agreement_id: str):
         """Gets the delivery history for a specific LPG supply point."""
-        params = {"supplyAgreementId": supply_agreement_id}
+        # FIX: Added required parameters 'skip' and 'pageSize'
+        params = {
+            "supplyAgreementId": supply_agreement_id,
+            "skip": 0,
+            "pageSize": 40
+        }
         return await self._make_api_call("GET", "/v2/private/lpg/deliveryHistory", params=params, description="LPG delivery history")
+
+    async def get_lpg_delivery_summary(self, supply_agreement_id: str):
+        """Gets the delivery summary for a specific LPG supply point."""
+        params = {"supplyAgreementId": supply_agreement_id}
+        return await self._make_api_call("GET", "/v2/private/lpg/deliverySummary", params=params, description="LPG delivery summary")
