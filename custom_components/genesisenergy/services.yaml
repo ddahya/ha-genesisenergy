@@ -1,5 +1,4 @@
 # This is the services.yaml file for the genesisenergy integration.
-# It should be placed in: <config_dir>/custom_components/genesisenergy/services.yaml
 
 add_powershout_booking:
   name: Add Power Shout Booking

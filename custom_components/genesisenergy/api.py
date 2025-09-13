@@ -194,12 +194,11 @@ class GenesisEnergyApi:
                         else:
                             _LOGGER.error(f"Unexpected status {response.status} during token refresh.")
                         return False
-            # Catch specific network errors first
+
             except aiohttp.ClientError as e:
                 _LOGGER.warning("A network error occurred during token refresh: %s", e)
-                # We raise CannotConnect so the coordinator knows to retry later
                 raise CannotConnect(f"Network error during token refresh: {e}") from e
-            # Catch other unexpected errors
+
             except Exception as e:
                 _LOGGER.exception("An unexpected error occurred during token refresh.")
                 return False
@@ -222,11 +221,8 @@ class GenesisEnergyApi:
                         # If refresh was successful, we're done
                         return
             except CannotConnect:
-                 # If refresh fails due to network, re-raise to stop the update.
-                 # This prevents an immediate, and likely failing, full login attempt.
                 raise
-
-            # If refresh failed for any other reason or was not possible, perform a full login
+                
             if not await self._perform_full_login(): raise CannotConnect("Full login failed.")
             if not (self._token and self._access_token_absolute_expiry_ts > (datetime.now(timezone.utc).timestamp() + self.TOKEN_VALIDITY_BUFFER_MINUTES * 60)): raise InvalidAuth("Token invalid after login.")
 
@@ -292,6 +288,32 @@ class GenesisEnergyApi:
     async def add_powershout_booking(self, start_date_str: str, duration: int, supply_agreement_id: str, supply_point_id: str, loyalty_account_id: str):
         payload = {"startDate": start_date_str, "supplyAgreementId": supply_agreement_id, "duration": duration, "supplyPointId": supply_point_id, "loyaltyAccountId": loyalty_account_id}
         return await self._make_api_call("POST", "/v2/private/powershoutcurrency/booking/add", json_payload=payload, description="add Power Shout booking", expect_json=False)
+    
+    async def accept_powershout_offer(
+        self,
+        loyalty_account_id: str,
+        member_id: str,
+        campaign_offer_id: str,
+        quantity: int,
+        offer_code: str
+    ) -> bool:
+        """Accepts a Power Shout offer."""
+        payload = {
+            "loyaltyAccountId": loyalty_account_id,
+            "memberId": member_id,
+            "campaignOfferId": campaign_offer_id,
+            "quantity": quantity,
+            "offerCode": offer_code,
+        }
+        response = await self._make_api_call(
+            "POST",
+            "/v2/private/powershoutcurrency/offer/accept",
+            json_payload=payload,
+            description="accept Power Shout offer",
+            expect_json=False
+        )
+        return response.get("status") == 200
+        
     async def get_billing_plans(self):
         return await self._make_api_call("GET", "/v2/private/billing/plans", description="billing plans")
     async def get_widget_property_list(self):
@@ -325,3 +347,22 @@ class GenesisEnergyApi:
     async def get_generation_mix(self):
         """Gets the generation mix forecast for the next two days."""
         return await self._make_api_call("GET", "/v2/private/generationMix/nextTwoDays", description="generation mix")
+
+    async def get_lpg_order_status(self):
+        """Gets the order status for all LPG supply points."""
+        return await self._make_api_call("GET", "/v2/private/lpg/orderStatus", description="LPG order status")
+
+    async def get_lpg_delivery_history(self, supply_agreement_id: str):
+        """Gets the delivery history for a specific LPG supply point."""
+        # FIX: Added required parameters 'skip' and 'pageSize'
+        params = {
+            "supplyAgreementId": supply_agreement_id,
+            "skip": 0,
+            "pageSize": 40
+        }
+        return await self._make_api_call("GET", "/v2/private/lpg/deliveryHistory", params=params, description="LPG delivery history")
+
+    async def get_lpg_delivery_summary(self, supply_agreement_id: str):
+        """Gets the delivery summary for a specific LPG supply point."""
+        params = {"supplyAgreementId": supply_agreement_id}
+        return await self._make_api_call("GET", "/v2/private/lpg/deliverySummary", params=params, description="LPG delivery summary")

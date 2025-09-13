@@ -22,7 +22,6 @@ class GenesisEnergyConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             await self.async_set_unique_id(user_input[CONF_EMAIL].lower())
             self._abort_if_unique_id_configured()
 
-            # API class now creates its own session
             api = GenesisEnergyApi(user_input[CONF_EMAIL], user_input[CONF_PASSWORD])
             
             try:
@@ -40,7 +39,6 @@ class GenesisEnergyConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                 _LOGGER.exception("Config flow failed with an unexpected exception")
                 errors["base"] = "unknown"
             finally:
-                # Ensure the session created for the test is always closed.
                 await api.close()
 
         return self.async_show_form(

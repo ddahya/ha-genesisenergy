@@ -24,17 +24,12 @@ class GenesisEnergyUpdaterBinarySensor(CoordinatorEntity[GenesisEnergyDataUpdate
         super().__init__(coordinator)
         self.entity_description = description
         self._attr_device_info = coordinator.device_info
-        
-        # --- FIX FOR NAMING AND UNIQUE ID ---
-        # Determine the fuel type from the key
+
         fuel_type = "electricity" if "electricity" in description.key else "gas"
-        
-        # Set a descriptive name
+
         self._attr_name = f"Force Update {fuel_type.capitalize()} Statistics"
-        
-        # Set a more robust and readable unique_id
+
         self._attr_unique_id = f"{coordinator.config_entry.entry_id}_force_update_{fuel_type}"
-        # --- END OF FIX ---
         
         self._attr_is_on = False
         LOGGER.info(f"Initialized BinarySensor '{self.name}' (UID: {self.unique_id})")
@@ -46,9 +41,9 @@ class GenesisEnergyUpdaterBinarySensor(CoordinatorEntity[GenesisEnergyDataUpdate
             self.async_write_ha_state()
 
         service_name = None
-        if "electricity" in self.entity_description.key: # More robust check
+        if "electricity" in self.entity_description.key: 
             service_name = SERVICE_FORCE_UPDATE_ELECTRICITY
-        elif "gas" in self.entity_description.key: # More robust check
+        elif "gas" in self.entity_description.key: 
             service_name = SERVICE_FORCE_UPDATE_GAS
 
         if service_name:
