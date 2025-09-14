@@ -11,6 +11,9 @@ This integration is built by reverse-engineering the Genesis Energy web portal a
 *   **Energy Dashboard Integration:**
     *   Creates long-term statistics for **Electricity Consumption (kWh)** and **Gas Consumption (kWh)**.
     *   Also creates statistics for daily **Electricity Cost (NZD)** and **Gas Cost (NZD)** for detailed tracking.
+*   **LPG (Bottled Gas) Integration:**
+    *   Automatically detects your LPG accounts and adds detailed information to new sensor.genesis_energy_lpg_details sensor.
+    *  The attributes contains your Order Status, full Delivery History, and a Usage Summary with statistics like average days between deliveries.
 *   **Electricity Forecast Sensors:**
     *   Integrates Genesis's daily and weekly electricity forecast.
     *   `Today's Forecast Usage (kWh)` and `Today's Forecast Cost ($)` sensors.
@@ -114,7 +117,9 @@ This service lets you Accept a pending Power Shout offer.
 
 **Example:** Automating Power Shout Acceptance
 You can create a simple and powerful automation that adds a button to your dashboard only when there are Power Shout offers available to be accepted.
+
 **1.** Create the accept_all_power_shout_offers Script
+
 This script iterates through all available offers and accepts each one.
 Go to Settings > Automations & Scenes > Scripts.
 Click Add Script and choose Create new script.
@@ -140,35 +145,14 @@ sequence:
 icon: mdi:auto-fix
 description: "Accepts all available Power Shout offers from Genesis Energy."
 ```
-**2.** Create a Template Binary Sensor Helper
-This binary sensor will turn 'on' whenever there are offers available, which we can use to show or hide the button.
-Go to Settings > Devices & Services > Helpers.
-Click Create Helper and select Template.
-Choose Binary Sensor.
-Fill in the fields:
-Name: Power Shout Offers Available
+**2.** Add a Conditional Button to your Dashboard
 
-State template:
-```
-{{ state_attr('sensor.genesis_energy_power_shout_balance', 'active_offers_count') > 0 }}
-```
-Icon: mdi:gift-outline
+Add this conditional card to your dashboard. It will only display the "Accept" button when the binary sensor is 'on'.
 
-Click Submit. This will create the entity binary_sensor.power_shout_offers_available.
-
-**3.** Add a Conditional Button to your Dashboard
-Finally, add this conditional card to your dashboard. It will only display the "Accept" button when the binary sensor you just created is 'on'.
-Open the dashboard you want to add the button to and click Edit Dashboard.
-Click Add Card and choose the Conditional card.
-Configure the card:
-Condition > Entity: binary_sensor.power_shout_offers_available
-Condition > State: on
-Click Add Card to add a card inside the conditional one. Choose the Button card.
-Switch to YAML mode for the button card and paste the following:
 ```
 type: conditional
 conditions:
-  - entity: binary_sensor.power_shout_offers_available
+  - entity: binary_sensor.genesis_energy_power_shout_offers_available
     state: "on"
 card:
   type: button
