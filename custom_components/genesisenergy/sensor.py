@@ -42,17 +42,15 @@ from .const import (
 )
 from .coordinator import GenesisEnergyDataUpdateCoordinator
 
-# This is a helper function to safely convert data to JSON
 def safe_json_dumps(data):
     def default_serializer(o):
-        return str(o) # Convert any non-serializable object to its string representation
+        return str(o) 
     return json.dumps(data, indent=2, default=default_serializer)
 
 async def async_setup_entry(hass: HomeAssistant, config_entry: ConfigEntry, async_add_entities: AddEntitiesCallback) -> None:
     coordinator: GenesisEnergyDataUpdateCoordinator = hass.data[DOMAIN][config_entry.entry_id]
     entities = []
     
-    # Check for available services from billing plans
     has_electricity, has_gas = False, False
     billing_plans_data = coordinator.data.get(DATA_API_BILLING_PLANS)
     if billing_plans_data and isinstance(billing_plans_data.get("billingAccountSites"), list):
@@ -102,7 +100,7 @@ async def async_setup_entry(hass: HomeAssistant, config_entry: ConfigEntry, asyn
     entities.extend([
         PowerShoutEligibilitySensor(coordinator),
         PowerShoutBalanceSensor(coordinator),
-        GenesisEnergyAccountSensor(coordinator) # LPG data will be added here
+        GenesisEnergyAccountSensor(coordinator)
     ])
     
     if coordinator.data.get(DATA_API_WIDGET_SIDEKICK):
@@ -646,7 +644,7 @@ class GenesisEnergyAccountSensor(CoordinatorEntity[GenesisEnergyDataUpdateCoordi
     @property
     def extra_state_attributes(self) -> Mapping[str, Any] | None:
         if not self.coordinator.data:
-            LOGGER.debug("[Account Sensor] Coordinator data is not available.")
+            LOGGER.warning("[Account Sensor] Coordinator data is not available.")
             return None
 
         attribute_keys = [
@@ -672,7 +670,6 @@ class GenesisEnergyAccountSensor(CoordinatorEntity[GenesisEnergyDataUpdateCoordi
             if data is None:
                 continue
 
-            # Always dump to JSON so everything looks consistent
             if isinstance(data, (dict, list)):
                 dumped = safe_json_dumps(data)
                 size_bytes = len(dumped.encode("utf-8"))

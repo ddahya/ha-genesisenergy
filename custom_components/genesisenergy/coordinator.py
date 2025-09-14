@@ -44,7 +44,6 @@ class GenesisEnergyDataUpdateCoordinator(DataUpdateCoordinator[dict[str, any]]):
         """Fetch all data from the API in parallel."""
         days_for_regular_fetch = 4
         
-        # Prepare all non-LPG API calls
         api_calls = {
             DATA_API_BILLING_PLANS: self.api.get_billing_plans(),
             DATA_API_ELECTRICITY_USAGE: self.api.get_energy_data(days_for_regular_fetch),
@@ -70,10 +69,8 @@ class GenesisEnergyDataUpdateCoordinator(DataUpdateCoordinator[dict[str, any]]):
             DATA_API_USAGE_BREAKDOWN: self.api.get_usage_breakdown(),
         }
         
-        # Run all non-LPG calls first
         results = await asyncio.gather(*api_calls.values(), return_exceptions=True)
         
-        # Populate the base data
         fetched_data = {}
         for key, result in zip(api_calls.keys(), results):
             if isinstance(result, Exception):
@@ -82,7 +79,6 @@ class GenesisEnergyDataUpdateCoordinator(DataUpdateCoordinator[dict[str, any]]):
             else:
                 fetched_data[key] = result
 
-        # --- LPG HANDLING ---
         lpg_details = {}
         try:
             order_status = await self.api.get_lpg_order_status()
@@ -106,12 +102,20 @@ class GenesisEnergyDataUpdateCoordinator(DataUpdateCoordinator[dict[str, any]]):
                             "delivery_history": histories_by_sa_id.get(sa_id),
                             "delivery_summary": summaries_by_sa_id.get(sa_id)
                         }
-        except Exception as e:
-            LOGGER.warning("An error occurred during LPG data fetching: %s", e)
+
+        except Exception as err:
+            if "supplyAgreementIds" in str(err):
+                LOGGER.debug("Skipping LPG fetch — account has no LPG supply agreements.")
+            else:
+                LOGGER.warning("An error occurred during LPG data fetching: %s", err)
 
         fetched_data[DATA_API_LPG_DETAILS] = lpg_details
-        LOGGER.debug("Final processed LPG details payload: %s", lpg_details)
-        
+        if lpg_details:
+            LOGGER.debug("Final processed LPG details payload: %s", lpg_details)
+        else:
+            LOGGER.debug("No LPG details to process (likely no LPG on account).")
+
+
         return fetched_data
 
     async def async_backfill_statistics_data(self, days_to_fetch: int, fuel_type: str) -> None:

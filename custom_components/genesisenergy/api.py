@@ -218,7 +218,6 @@ class GenesisEnergyApi:
             try:
                 if self._refresh_token and (self._refresh_token_absolute_expiry_ts == 0 or self._refresh_token_absolute_expiry_ts > datetime.now(timezone.utc).timestamp()):
                     if await self._refresh_access_token():
-                        # If refresh was successful, we're done
                         return
             except CannotConnect:
                 raise
@@ -354,7 +353,6 @@ class GenesisEnergyApi:
 
     async def get_lpg_delivery_history(self, supply_agreement_id: str):
         """Gets the delivery history for a specific LPG supply point."""
-        # FIX: Added required parameters 'skip' and 'pageSize'
         params = {
             "supplyAgreementId": supply_agreement_id,
             "skip": 0,
