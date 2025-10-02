@@ -617,12 +617,23 @@ class PowerShoutBalanceSensor(CoordinatorEntity[GenesisEnergyDataUpdateCoordinat
         if offers := self.coordinator.data.get(DATA_API_POWERSHOUT_OFFERS, {}): 
             attrs["active_offers_count"] = len(offers.get("activeOffers", []))
             attrs["active_offers"] = offers.get("activeOffers", [])
-        if expiring := self.coordinator.data.get(DATA_API_POWERSHOUT_EXPIRING, {}):
-            if msg := expiring.get("expiringHoursMessage", {}): attrs["expiring_hours_message"] = msg.get("title")
+        if expiring := self.coordinator.data.get(DATA_API_POWERSHOUT_EXPIRING):
+            if msg := expiring.get("expiringHoursMessage"):
+                template_title = msg.get("title")
+                substrings = msg.get("titleSubstrings")
+                if template_title and isinstance(substrings, list) and substrings:
+                    if value := substrings[0].get("text"):
+                        attrs["expiring_hours_message"] = template_title.replace("{{0}}", value)
+                elif template_title:
+                    attrs["expiring_hours_message"] = template_title
+            if tooltip := expiring.get("messageTooltip", {}).get("description"):
+                attrs["expiring_hours_tooltip"] = tooltip
         if bookings := self.coordinator.data.get(DATA_API_POWERSHOUT_BOOKINGS, {}):
             utc = ZoneInfo("UTC")
-            upcoming = [b for b in bookings.get("bookings", []) if isinstance(b, dict) and datetime.fromisoformat(b.get("startDate")).astimezone(utc) > dt_util.utcnow()]
-            if upcoming: upcoming.sort(key=lambda b: b["start"]); attrs["next_booking_start"] = upcoming[0].get("startDate")
+            upcoming = [b for b in bookings.get("bookings", []) if isinstance(b, dict) and b.get("startDate") and datetime.fromisoformat(b.get("startDate")).astimezone(utc) > dt_util.utcnow()]
+            if upcoming: 
+                upcoming.sort(key=lambda b: b["startDate"])
+                attrs["next_booking_start"] = upcoming[0].get("startDate")
         return attrs
 class GenesisEnergyAccountSensor(CoordinatorEntity[GenesisEnergyDataUpdateCoordinator], SensorEntity):
     _attr_has_entity_name = True
