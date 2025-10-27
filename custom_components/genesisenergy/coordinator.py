@@ -23,9 +23,8 @@ from .const import (
     DATA_API_WIDGET_ECO_TRACKER, DATA_API_WIDGET_DASHBOARD_LIST,
     DATA_API_WIDGET_ACTION_TILE_LIST, DATA_API_NEXT_BEST_ACTION,
     DATA_API_GENERATION_MIX, DATA_API_EV_PLAN_USAGE, DATA_API_ELECTRICITY_FORECAST,
-    DATA_API_USAGE_BREAKDOWN
+    DATA_API_USAGE_BREAKDOWN, SENSOR_KEY_LPG_DETAILS, DATA_API_LPG_DETAILS
 )
-# DO NOT import from .sensor here. This is the key to fixing the circular import.
 
 class GenesisEnergyDataUpdateCoordinator(DataUpdateCoordinator[dict[str, any]]):
     config_entry: ConfigEntry; api: GenesisEnergyApi; device_info: DeviceInfo
@@ -45,7 +44,9 @@ class GenesisEnergyDataUpdateCoordinator(DataUpdateCoordinator[dict[str, any]]):
         """Fetch all data from the API in parallel."""
         days_for_regular_fetch = 4
         
+        # Prepare all non-LPG API calls
         api_calls = {
+            DATA_API_BILLING_PLANS: self.api.get_billing_plans(),
             DATA_API_ELECTRICITY_USAGE: self.api.get_energy_data(days_for_regular_fetch),
             DATA_API_EV_PLAN_USAGE: self.api.get_ev_plan_usage(),
             DATA_API_GAS_USAGE: self.api.get_gas_data(days_for_regular_fetch),
@@ -54,7 +55,6 @@ class GenesisEnergyDataUpdateCoordinator(DataUpdateCoordinator[dict[str, any]]):
             DATA_API_POWERSHOUT_BOOKINGS: self.api.get_powershout_bookings(),
             DATA_API_POWERSHOUT_OFFERS: self.api.get_powershout_offers(),
             DATA_API_POWERSHOUT_EXPIRING: self.api.get_powershout_expiring_hours(),
-            DATA_API_BILLING_PLANS: self.api.get_billing_plans(),
             DATA_API_WIDGET_HERO: self.api.get_widget_hero_info(),
             DATA_API_WIDGET_BILLS: self.api.get_widget_bill_summary(),
             DATA_API_WIDGET_PROPERTY_LIST: self.api.get_widget_property_list(),
@@ -69,9 +69,11 @@ class GenesisEnergyDataUpdateCoordinator(DataUpdateCoordinator[dict[str, any]]):
             DATA_API_ELECTRICITY_FORECAST: self.api.get_electricity_forecast(),
             DATA_API_USAGE_BREAKDOWN: self.api.get_usage_breakdown(),
         }
-
+        
+        # Run all non-LPG calls first
         results = await asyncio.gather(*api_calls.values(), return_exceptions=True)
         
+        # Populate the base data
         fetched_data = {}
         for key, result in zip(api_calls.keys(), results):
             if isinstance(result, Exception):
@@ -79,7 +81,37 @@ class GenesisEnergyDataUpdateCoordinator(DataUpdateCoordinator[dict[str, any]]):
                 fetched_data[key] = None
             else:
                 fetched_data[key] = result
+
+        # --- LPG HANDLING ---
+        lpg_details = {}
+        try:
+            order_status = await self.api.get_lpg_order_status()
+            if order_status and isinstance(order_status.get("billingAccountSites"), list):
+                lpg_supply_points = [sp for site in order_status.get("billingAccountSites", []) for sp in site.get("supplyPoints", []) if sp.get("supplyAgreementId")]
+                sa_ids = [sp["supplyAgreementId"] for sp in lpg_supply_points]
                 
+                if sa_ids:
+                    history_results, summary_results = await asyncio.gather(
+                        asyncio.gather(*[self.api.get_lpg_delivery_history(sa_id) for sa_id in sa_ids], return_exceptions=True),
+                        asyncio.gather(*[self.api.get_lpg_delivery_summary(sa_id) for sa_id in sa_ids], return_exceptions=True)
+                    )
+                    histories_by_sa_id = {sa_id: res for sa_id, res in zip(sa_ids, history_results) if not isinstance(res, Exception)}
+                    summaries_by_sa_id = {sa_id: res for sa_id, res in zip(sa_ids, summary_results) if not isinstance(res, Exception)}
+
+                    for sp_data in lpg_supply_points:
+                        sp_id = sp_data["id"]
+                        sa_id = sp_data["supplyAgreementId"]
+                        lpg_details[sp_id] = {
+                            "order_status": sp_data,
+                            "delivery_history": histories_by_sa_id.get(sa_id),
+                            "delivery_summary": summaries_by_sa_id.get(sa_id)
+                        }
+        except Exception as e:
+            LOGGER.warning("An error occurred during LPG data fetching: %s", e)
+
+        fetched_data[DATA_API_LPG_DETAILS] = lpg_details
+        LOGGER.debug("Final processed LPG details payload: %s", lpg_details)
+        
         return fetched_data
 
     async def async_backfill_statistics_data(self, days_to_fetch: int, fuel_type: str) -> None:
