@@ -57,7 +57,7 @@ class GenesisEnergyApi:
 
     async def _perform_full_login(self) -> bool:
         """Performs a full login using a temporary, clean session and manual cookie management."""
-        _LOGGER.info("Attempting full login with a temporary, clean session...")
+        _LOGGER.info("Attempting full login...")
         
         connector = aiohttp.TCPConnector(family=socket.AF_INET)
         async with aiohttp.ClientSession(connector=connector, cookie_jar=aiohttp.DummyCookieJar()) as session:
@@ -73,40 +73,39 @@ class GenesisEnergyApi:
             try:
                 base_headers = {"User-Agent": BROWSER_USER_AGENT}
                 # Step 1
-                _LOGGER.debug("Login Step 1: Fetching initial auth page...")
                 url_s1 = f"{self._url_token_base}/oauth2/v2.0/authorize"
                 p_s1 = {'p': self._p, 'client_id': self._client_id, 'response_type': 'code', 'response_mode': 'query', 'scope': f'openid offline_access {self._client_id}', 'redirect_uri': self._redirect_uri}
                 async with session.get(url_s1, params=p_s1, headers=base_headers) as r_s1:
                     txt_s1 = await r_s1.text()
                     update_cookies_from_response(r_s1)
                     r_s1.raise_for_status()
+                _LOGGER.info("Login Step 1: Fetching initial auth page...✅")
                 sjson = self._get_setting_json(txt_s1)
                 if not sjson: raise CannotConnect("Login S1: no settings_json")
                 tid, csrf = sjson.get("transId"), sjson.get("csrf")
                 if not tid or not csrf: raise CannotConnect("Login S1: no tid/csrf")
                 
                 # Step 2
-                _LOGGER.debug("Login Step 2: Posting email...")
                 url_s2 = f"{self._url_token_base}/{self._p}/SelfAsserted?tx={tid}&p={self._p}"
                 pay_s2 = {"request_type": "RESPONSE", "email": self._email}
                 hdr_s2 = {**base_headers, 'X-CSRF-TOKEN': csrf, 'Cookie': get_cookie_header()}
                 async with session.post(url_s2, headers=hdr_s2, data=pay_s2) as r_s2:
                     update_cookies_from_response(r_s2)
                     r_s2.raise_for_status()
+                _LOGGER.info("Login Step 2: Posting email...✅")
 
                 # Step 3
-                _LOGGER.debug("Login Step 3: Confirming email...")
                 url_s3 = f"{self._url_token_base}/{self._p}/api/SelfAsserted/confirmed"
                 p_s3 = {'csrf_token': csrf, 'tx': tid, 'p': self._p}
                 hdr_s3 = {**base_headers, 'Referer': str(url_s2), 'Cookie': get_cookie_header()}
                 async with session.get(url_s3, params=p_s3, headers=hdr_s3) as r_s3:
                     update_cookies_from_response(r_s3)
                     r_s3.raise_for_status()
+                _LOGGER.info("Login Step 3: Confirming email...✅")
                 if 'x-ms-cpim-csrf' in cookies: csrf = cookies['x-ms-cpim-csrf']
                 else: raise CannotConnect("Login S3: CSRF cookie missing after confirm")
 
                 # Step 4
-                _LOGGER.debug("Login Step 4: Posting password...")
                 url_s4 = f"{self._url_token_base}/{self._p}/SelfAsserted?tx={tid}&p={self._p}"
                 pay_s4 = {"request_type": "RESPONSE", "signInName": self._email, "password": self._password}
                 hdr_s4 = {**base_headers, 'X-CSRF-TOKEN': csrf, 'Cookie': get_cookie_header()}
@@ -116,19 +115,19 @@ class GenesisEnergyApi:
                         s4_text = await r_s4.text()
                         if "The username or password provided in the request are invalid" in s4_text: raise InvalidAuth("Invalid username or password.")
                         r_s4.raise_for_status()
+                _LOGGER.info("Login Step 4: Posting password...✅")
 
                 # Step 5
-                _LOGGER.debug("Login Step 5: Finalizing login to get redirect...")
                 url_s5 = f"{self._url_token_base}/{self._p}/api/CombinedSigninAndSignup/confirmed"
                 p_s5 = {'rememberMe': 'false', 'csrf_token': csrf, 'tx': tid, 'p': self._p}
                 hdr_s5 = {**base_headers, 'Cookie': get_cookie_header()}
                 async with session.get(url_s5, params=p_s5, headers=hdr_s5, allow_redirects=False) as r_s5:
                     if r_s5.status != 302: raise CannotConnect(f"Login S5: status {r_s5.status}")
                     loc = r_s5.headers.get('Location', '')
+                _LOGGER.info("Login Step 5: Finalizing login to get redirect...✅")
                 if not loc: raise CannotConnect("Login S5: no location header")
                 
                 # Step 6
-                _LOGGER.debug("Login Step 6: Exchanging code for token...")
                 qpr = parse_qs(loc.split('?', 1)[1])
                 if 'error' in qpr: raise InvalidAuth(f"Login S5 error: {qpr['error'][0]}")
                 if 'code' not in qpr: raise CannotConnect("Login S5: no auth code")
@@ -144,7 +143,8 @@ class GenesisEnergyApi:
                         self._access_token_absolute_expiry_ts = (now_ts + int(expires_in)) if expires_in else 0
                         self._refresh_token_absolute_expiry_ts = (now_ts + int(rt_expires_in)) if rt_expires_in else 0
                         if not self._token: raise InvalidAuth("Login S6: no access token")
-                        _LOGGER.info("Full login successful.")
+                        _LOGGER.info("Login Step 6: Exchanging code for token...✅")
+                        _LOGGER.info("Genesis Energy Full login successful.✅")
                         return True
                     else: raise CannotConnect(f"Login S6: status {r_s6.status}")
             
@@ -176,23 +176,23 @@ class GenesisEnergyApi:
                         if self._token and new_expires_in is not None:
                             now_ts = datetime.now(timezone.utc).timestamp()
                             self._access_token_absolute_expiry_ts = now_ts + int(new_expires_in)
-                            _LOGGER.info("Access token refreshed successfully.")
+                            _LOGGER.info("Access token refreshed successfully.✅")
                             new_rt = data.get("refresh_token")
                             if new_rt and new_rt != self._refresh_token:
                                 self._refresh_token = new_rt
                                 new_rt_expires_in = data.get("refresh_token_expires_in")
                                 if new_rt_expires_in is not None: self._refresh_token_absolute_expiry_ts = now_ts + int(new_rt_expires_in)
-                                _LOGGER.info("Refresh token was rotated.")
+                                _LOGGER.info("Refresh token was rotated.✅")
                             return True
-                        _LOGGER.warning("Token refresh response was OK but malformed.")
+                        _LOGGER.warning("Token refresh response was OK but malformed.❌")
                         return False
                     else:
                         if response.status in [400, 401]:
-                            _LOGGER.warning("Refresh token is invalid. Forcing full re-login.")
+                            _LOGGER.warning("Refresh token is invalid. Forcing full re-login.❌")
                             self._refresh_token = None
                             self._refresh_token_absolute_expiry_ts = 0
                         else:
-                            _LOGGER.error(f"Unexpected status {response.status} during token refresh.")
+                            _LOGGER.error(f"Unexpected status {response.status} during token refresh.❌")
                         return False
 
             except aiohttp.ClientError as e:
@@ -218,7 +218,6 @@ class GenesisEnergyApi:
             try:
                 if self._refresh_token and (self._refresh_token_absolute_expiry_ts == 0 or self._refresh_token_absolute_expiry_ts > datetime.now(timezone.utc).timestamp()):
                     if await self._refresh_access_token():
-                        # If refresh was successful, we're done
                         return
             except CannotConnect:
                 raise
@@ -354,7 +353,6 @@ class GenesisEnergyApi:
 
     async def get_lpg_delivery_history(self, supply_agreement_id: str):
         """Gets the delivery history for a specific LPG supply point."""
-        # FIX: Added required parameters 'skip' and 'pageSize'
         params = {
             "supplyAgreementId": supply_agreement_id,
             "skip": 0,

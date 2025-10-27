@@ -53,6 +53,13 @@ backfill_statistics:
             - "electricity"
             - "gas"
             - "both"
+    force_overwrite:
+      name: Force Overwrite
+      description: "If enabled, ignores existing data and re-fetches the entire period. Use this to fix corrupted or missing days."
+      required: true  
+      example: false
+      selector:
+        boolean: {}
 
 force_update:
   name: Force Data Update

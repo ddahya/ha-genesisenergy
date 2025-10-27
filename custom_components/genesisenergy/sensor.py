@@ -1,6 +1,6 @@
 # custom_components/genesisenergy/sensor.py
 import logging
-from datetime import datetime, date, timedelta
+from datetime import datetime, date, timedelta, timezone
 from zoneinfo import ZoneInfo
 from typing import Any, Mapping
 import json
@@ -16,7 +16,7 @@ from homeassistant.util import dt as dt_util
 
 from homeassistant.components.recorder import get_instance
 from homeassistant.components.recorder.models import StatisticData, StatisticMetaData
-from homeassistant.components.recorder.statistics import async_add_external_statistics, get_last_statistics
+from homeassistant.components.recorder.statistics import async_add_external_statistics, get_last_statistics, statistics_during_period
 
 from .const import (
     DOMAIN, LOGGER, DATA_API_ELECTRICITY_USAGE, DATA_API_GAS_USAGE, DATA_API_POWERSHOUT_INFO,
@@ -42,17 +42,16 @@ from .const import (
 )
 from .coordinator import GenesisEnergyDataUpdateCoordinator
 
-# This is a helper function to safely convert data to JSON
 def safe_json_dumps(data):
     def default_serializer(o):
-        return str(o) # Convert any non-serializable object to its string representation
+        return str(o) 
     return json.dumps(data, indent=2, default=default_serializer)
+
 
 async def async_setup_entry(hass: HomeAssistant, config_entry: ConfigEntry, async_add_entities: AddEntitiesCallback) -> None:
     coordinator: GenesisEnergyDataUpdateCoordinator = hass.data[DOMAIN][config_entry.entry_id]
     entities = []
     
-    # Check for available services from billing plans
     has_electricity, has_gas = False, False
     billing_plans_data = coordinator.data.get(DATA_API_BILLING_PLANS)
     if billing_plans_data and isinstance(billing_plans_data.get("billingAccountSites"), list):
@@ -68,17 +67,20 @@ async def async_setup_entry(hass: HomeAssistant, config_entry: ConfigEntry, asyn
                         has_gas = True
 
     if has_electricity:
-        entities.append(GenesisEnergyStatisticsSensor(coordinator, "Electricity"))
+        elec_sensor = GenesisEnergyStatisticsSensor(coordinator, "Electricity")
+        entities.append(elec_sensor)
+        coordinator.statistics_sensors.append(elec_sensor)
+        
         if coordinator.data.get(DATA_API_GENERATION_MIX):
             entities.append(GenerationMixSensor(coordinator))
         if coordinator.data.get(DATA_API_ELECTRICITY_FORECAST):
-            LOGGER.info("Electricity forecast data found. Adding forecast sensors.")
+            LOGGER.info("Electricity forecast data found. Adding forecast sensors. ✅")
             entities.extend([
                 ForecastUsageSensor(coordinator),
                 ForecastCostSensor(coordinator),
             ])
         if coordinator.data.get(DATA_API_USAGE_BREAKDOWN):
-            LOGGER.info("Usage breakdown data found. Adding breakdown sensors.")
+            LOGGER.info("Usage breakdown data found. Adding breakdown sensors. ✅")
             entities.extend([
                 UsageBreakdownSensor(coordinator, "Appliances", SENSOR_KEY_BREAKDOWN_APPLIANCES),
                 UsageBreakdownSensor(coordinator, "Electronics", SENSOR_KEY_BREAKDOWN_ELECTRONICS),
@@ -87,10 +89,12 @@ async def async_setup_entry(hass: HomeAssistant, config_entry: ConfigEntry, asyn
             ])
         
     if has_gas:
-        entities.append(GenesisEnergyStatisticsSensor(coordinator, "Gas"))
+        gas_sensor = GenesisEnergyStatisticsSensor(coordinator, "Gas")
+        entities.append(gas_sensor)
+        coordinator.statistics_sensors.append(gas_sensor)
         
     if coordinator.data.get(DATA_API_EV_PLAN_USAGE):
-        LOGGER.info("EV Plan data found. Adding EV plan sensors.")
+        LOGGER.info("EV Plan data found. Adding EV plan sensors. ✅")
         entities.extend([
             EVDayUsageSensor(coordinator),
             EVDayCostSensor(coordinator),
@@ -98,15 +102,18 @@ async def async_setup_entry(hass: HomeAssistant, config_entry: ConfigEntry, asyn
             EVNightCostSensor(coordinator),
             EVTotalSavingsSensor(coordinator)
         ])
+    else:
+        LOGGER.info("No EV Plan data found. Skipping EV plan sensors. ❌")
+
 
     entities.extend([
         PowerShoutEligibilitySensor(coordinator),
         PowerShoutBalanceSensor(coordinator),
-        GenesisEnergyAccountSensor(coordinator) # LPG data will be added here
+        GenesisEnergyAccountSensor(coordinator)
     ])
     
     if coordinator.data.get(DATA_API_WIDGET_SIDEKICK):
-        LOGGER.info("Sidekick widget data found. Adding billing sensors.")
+        LOGGER.info("Sidekick widget data found. Adding billing sensors. ✅")
         entities.append(TotalUsedSensor(coordinator))
         entities.append(EstimatedTotalSensor(coordinator))
         entities.append(EstimatedFutureUseSensor(coordinator))
@@ -115,10 +122,10 @@ async def async_setup_entry(hass: HomeAssistant, config_entry: ConfigEntry, asyn
         if has_gas:
             entities.append(GasUsedSensor(coordinator))
     else:
-        LOGGER.warning("Sidekick widget data not found. Skipping billing sensors.")
+        LOGGER.info("Sidekick widget data not found. Skipping billing sensors. ❌")
     
     if coordinator.data.get(DATA_API_LPG_DETAILS):
-        LOGGER.info("LPG details data found. Adding LPG sensor.")
+        LOGGER.info("LPG details data found. Adding LPG sensor. ✅")
         entities.append(LPGDetailsSensor(coordinator))
     
     async_add_entities(entities)
@@ -187,19 +194,42 @@ class GenesisEnergyStatisticsSensor(CoordinatorEntity[GenesisEnergyDataUpdateCoo
                         self._processed_data_hash = current_hash
         self.async_write_ha_state()
 
-    async def async_process_statistics_data(self, usage_data: list):
+    async def async_process_statistics_data(self, usage_data: list, force_overwrite: bool = False, start_date: date | None = None):
         if not usage_data: return
         try:
             sorted_usage_data = sorted(usage_data, key=lambda x: x['startDate'])
         except (KeyError, TypeError): return
         
+        LOGGER.info(f"  Processing {len(usage_data)} entries for {self._fuel_type}")
+
         async def _process_one_statistic(statistic_id: str, stat_name: str, unit: str, value_key: str):
-            last_stat_list = await get_instance(self.hass).async_add_executor_job(
-                get_last_statistics, self.hass, 1, statistic_id, True, {"sum"}
-            )
-            last_stat = last_stat_list.get(statistic_id, [{}])[0]
-            running_sum = float(last_stat.get('sum', 0.0))
-            last_ts = last_stat.get('start', 0)
+            running_sum = 0.0
+            last_ts = 0
+
+            if force_overwrite and start_date:
+                start_datetime = datetime.combine(start_date, datetime.min.time()).replace(tzinfo=timezone.utc)
+                stats = await get_instance(self.hass).async_add_executor_job(
+                    statistics_during_period,
+                    self.hass,
+                    start_datetime - timedelta(days=30), 
+                    start_datetime,
+                    {statistic_id},
+                    "hour",
+                    None,
+                    {"sum"},
+                )
+                if stats and statistic_id in stats and stats[statistic_id]:
+                    last_stat_before_period = stats[statistic_id][-1]
+                    running_sum = float(last_stat_before_period.get('sum', 0.0))
+            else:
+                last_stat_list = await get_instance(self.hass).async_add_executor_job(
+                    get_last_statistics, self.hass, 1, statistic_id, True, {"sum"}
+                )
+                if last_stat_list and statistic_id in last_stat_list:
+                    last_stat = last_stat_list[statistic_id][0]
+                    running_sum = float(last_stat.get('sum', 0.0))
+                    last_ts = last_stat.get('start', 0)
+
             stats_to_add = []
             for entry in sorted_usage_data:
                 try:
@@ -207,19 +237,25 @@ class GenesisEnergyStatisticsSensor(CoordinatorEntity[GenesisEnergyDataUpdateCoo
                     start_dt_utc = datetime.fromisoformat(entry['startDate']).astimezone(self._utc_tz)
                     start_ts = start_dt_utc.timestamp()
                 except (KeyError, ValueError, TypeError): continue
-                if start_ts > last_ts:
+                
+                if force_overwrite or start_ts > last_ts:
                     running_sum += value
                     stats_to_add.append(StatisticData(start=start_dt_utc, state=round(value, 2), sum=round(running_sum, 2)))
+            
             if stats_to_add:
+                if force_overwrite:
+                    LOGGER.info(f"  Importing {len(stats_to_add)} '{stat_name}' statistics with overwrite enabled.")
+                else:
+                    LOGGER.info(f"  Imported {len(stats_to_add)} new '{stat_name}' statistics.")
+                
                 meta = StatisticMetaData(has_mean=False, has_sum=True, name=stat_name, source=DOMAIN, statistic_id=statistic_id, unit_of_measurement=unit)
                 async_add_external_statistics(self.hass, meta, stats_to_add)
-                LOGGER.info(f"Imported {len(stats_to_add)} new '{stat_name}' statistics.")
+
             else:
-                 LOGGER.info(f"No new data to import for '{stat_name}' (all data was older or the same as existing).")
+                 LOGGER.info(f"  No new data to import for '{stat_name}' (all data was older or the same as existing).")
         
         await _process_one_statistic(self._consumption_statistic_id, self._consumption_statistic_name, self._unit, 'kw')
         await _process_one_statistic(self._cost_statistic_id, self._cost_statistic_name, self._currency, 'costNZD')
-
 
 class GenerationMixSensor(CoordinatorEntity[GenesisEnergyDataUpdateCoordinator], SensorEntity):
     _attr_has_entity_name = True
@@ -619,12 +655,23 @@ class PowerShoutBalanceSensor(CoordinatorEntity[GenesisEnergyDataUpdateCoordinat
         if offers := self.coordinator.data.get(DATA_API_POWERSHOUT_OFFERS, {}): 
             attrs["active_offers_count"] = len(offers.get("activeOffers", []))
             attrs["active_offers"] = offers.get("activeOffers", [])
-        if expiring := self.coordinator.data.get(DATA_API_POWERSHOUT_EXPIRING, {}):
-            if msg := expiring.get("expiringHoursMessage", {}): attrs["expiring_hours_message"] = msg.get("title")
+        if expiring := self.coordinator.data.get(DATA_API_POWERSHOUT_EXPIRING):
+            if msg := expiring.get("expiringHoursMessage"):
+                template_title = msg.get("title")
+                substrings = msg.get("titleSubstrings")
+                if template_title and isinstance(substrings, list) and substrings:
+                    if value := substrings[0].get("text"):
+                        attrs["expiring_hours_message"] = template_title.replace("{{0}}", value)
+                elif template_title:
+                    attrs["expiring_hours_message"] = template_title
+            if tooltip := expiring.get("messageTooltip", {}).get("description"):
+                attrs["expiring_hours_tooltip"] = tooltip
         if bookings := self.coordinator.data.get(DATA_API_POWERSHOUT_BOOKINGS, {}):
             utc = ZoneInfo("UTC")
-            upcoming = [b for b in bookings.get("bookings", []) if isinstance(b, dict) and datetime.fromisoformat(b.get("startDate")).astimezone(utc) > dt_util.utcnow()]
-            if upcoming: upcoming.sort(key=lambda b: b["start"]); attrs["next_booking_start"] = upcoming[0].get("startDate")
+            upcoming = [b for b in bookings.get("bookings", []) if isinstance(b, dict) and b.get("startDate") and datetime.fromisoformat(b.get("startDate")).astimezone(utc) > dt_util.utcnow()]
+            if upcoming: 
+                upcoming.sort(key=lambda b: b["startDate"])
+                attrs["next_booking_start"] = upcoming[0].get("startDate")
         return attrs
 class GenesisEnergyAccountSensor(CoordinatorEntity[GenesisEnergyDataUpdateCoordinator], SensorEntity):
     _attr_has_entity_name = True
@@ -646,7 +693,7 @@ class GenesisEnergyAccountSensor(CoordinatorEntity[GenesisEnergyDataUpdateCoordi
     @property
     def extra_state_attributes(self) -> Mapping[str, Any] | None:
         if not self.coordinator.data:
-            LOGGER.debug("[Account Sensor] Coordinator data is not available.")
+            LOGGER.warning("[Account Sensor] Coordinator data is not available.")
             return None
 
         attribute_keys = [
@@ -672,7 +719,6 @@ class GenesisEnergyAccountSensor(CoordinatorEntity[GenesisEnergyDataUpdateCoordi
             if data is None:
                 continue
 
-            # Always dump to JSON so everything looks consistent
             if isinstance(data, (dict, list)):
                 dumped = safe_json_dumps(data)
                 size_bytes = len(dumped.encode("utf-8"))

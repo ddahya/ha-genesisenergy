@@ -9,7 +9,7 @@ LOGGER: Logger = getLogger(__package__)
 DOMAIN: Final = "genesisenergy"
 INTEGRATION_NAME: Final = "Genesis Energy"
 
-PLATFORMS: Final = ["sensor"]
+PLATFORMS: Final = ["sensor", "binary_sensor"]
 
 # --- Configuration ---
 CONF_EMAIL: Final = "email"

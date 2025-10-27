@@ -1,6 +1,7 @@
 # custom_components/genesisenergy/coordinator.py
 from datetime import datetime, timedelta, timezone
 import asyncio
+from typing import TYPE_CHECKING
 from zoneinfo import ZoneInfo
 
 from homeassistant.config_entries import ConfigEntry
@@ -8,7 +9,10 @@ from homeassistant.core import HomeAssistant
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
 from homeassistant.helpers.device_registry import DeviceInfo
 from homeassistant.exceptions import ConfigEntryNotReady
-from homeassistant.helpers import entity_registry as er
+from homeassistant.components.recorder.statistics import statistics_during_period
+from homeassistant.components.recorder import get_instance
+from homeassistant.util import dt as dt_util
+
 
 from .api import GenesisEnergyApi
 from .exceptions import CannotConnect, InvalidAuth, ApiError
@@ -26,12 +30,17 @@ from .const import (
     DATA_API_USAGE_BREAKDOWN, SENSOR_KEY_LPG_DETAILS, DATA_API_LPG_DETAILS
 )
 
+if TYPE_CHECKING:
+    from .sensor import GenesisEnergyStatisticsSensor
+
+
 class GenesisEnergyDataUpdateCoordinator(DataUpdateCoordinator[dict[str, any]]):
     config_entry: ConfigEntry; api: GenesisEnergyApi; device_info: DeviceInfo
     def __init__(self, hass: HomeAssistant, entry: ConfigEntry) -> None:
         self.config_entry = entry; self.api = GenesisEnergyApi(email=entry.data[CONF_EMAIL], password=entry.data[CONF_PASSWORD])
         device_name = self.config_entry.title
         self.device_info = DeviceInfo(identifiers={(DOMAIN, self.config_entry.entry_id)}, name=device_name, manufacturer=DEVICE_MANUFACTURER, model=f"{DEVICE_MODEL} (Polls every {DEFAULT_SCAN_INTERVAL_HOURS}h)", configuration_url="https://myaccount.genesisenergy.co.nz/")
+        self.statistics_sensors: list["GenesisEnergyStatisticsSensor"] = []
         super().__init__(hass, LOGGER, name=DOMAIN, update_interval=timedelta(hours=DEFAULT_SCAN_INTERVAL_HOURS))
     
     async def _async_update_data(self) -> dict[str, any]:
@@ -44,7 +53,6 @@ class GenesisEnergyDataUpdateCoordinator(DataUpdateCoordinator[dict[str, any]]):
         """Fetch all data from the API in parallel."""
         days_for_regular_fetch = 4
         
-        # Prepare all non-LPG API calls
         api_calls = {
             DATA_API_BILLING_PLANS: self.api.get_billing_plans(),
             DATA_API_ELECTRICITY_USAGE: self.api.get_energy_data(days_for_regular_fetch),
@@ -70,10 +78,8 @@ class GenesisEnergyDataUpdateCoordinator(DataUpdateCoordinator[dict[str, any]]):
             DATA_API_USAGE_BREAKDOWN: self.api.get_usage_breakdown(),
         }
         
-        # Run all non-LPG calls first
         results = await asyncio.gather(*api_calls.values(), return_exceptions=True)
         
-        # Populate the base data
         fetched_data = {}
         for key, result in zip(api_calls.keys(), results):
             if isinstance(result, Exception):
@@ -82,7 +88,6 @@ class GenesisEnergyDataUpdateCoordinator(DataUpdateCoordinator[dict[str, any]]):
             else:
                 fetched_data[key] = result
 
-        # --- LPG HANDLING ---
         lpg_details = {}
         try:
             order_status = await self.api.get_lpg_order_status()
@@ -106,46 +111,106 @@ class GenesisEnergyDataUpdateCoordinator(DataUpdateCoordinator[dict[str, any]]):
                             "delivery_history": histories_by_sa_id.get(sa_id),
                             "delivery_summary": summaries_by_sa_id.get(sa_id)
                         }
-        except Exception as e:
-            LOGGER.warning("An error occurred during LPG data fetching: %s", e)
+
+        except Exception as err:
+            if "supplyAgreementIds" in str(err):
+                LOGGER.debug("Skipping LPG fetch — account has no LPG supply agreements.")
+            else:
+                LOGGER.warning("An error occurred during LPG data fetching: %s", err)
 
         fetched_data[DATA_API_LPG_DETAILS] = lpg_details
-        LOGGER.debug("Final processed LPG details payload: %s", lpg_details)
-        
+        if lpg_details:
+            LOGGER.debug("Final processed LPG details payload: %s", lpg_details)
+        else:
+            LOGGER.debug("No LPG details to process (likely no LPG on account).")
+
+
         return fetched_data
 
-    async def async_backfill_statistics_data(self, days_to_fetch: int, fuel_type: str) -> None:
+    async def async_backfill_statistics_data(self, days_to_fetch: int, fuel_type: str, force_overwrite: bool = False) -> None:
+        """
+        Service to backfill historical statistics, intelligently fetching only missing days.
+        """
         from .sensor import GenesisEnergyStatisticsSensor
-        LOGGER.info(f"Starting historical backfill service for '{fuel_type}' for {days_to_fetch} days.")
-        process_elec, process_gas = fuel_type in ["electricity", "both"], fuel_type in ["gas", "both"]
+        LOGGER.info(f"Starting historical backfill for '{fuel_type}' for the last {days_to_fetch} days...")
+        
+        process_elec, process_gas = "electricity" in [fuel_type, "both"], "gas" in [fuel_type, "both"]
+
         elec_sensor: GenesisEnergyStatisticsSensor | None = None
         gas_sensor: GenesisEnergyStatisticsSensor | None = None
-        registry = er.async_get(self.hass)
-        for entity_id, entry in registry.entities.items():
-            if entry.config_entry_id == self.config_entry.entry_id and "statistics_updater" in entry.unique_id:
-                entity = self.hass.data.get("sensor", {}).get_entity(entity_id)
-                if isinstance(entity, GenesisEnergyStatisticsSensor):
-                    if entity._fuel_type == "Electricity": elec_sensor = entity
-                    elif entity._fuel_type == "Gas": gas_sensor = entity
+        for sensor in self.statistics_sensors:
+            if sensor._fuel_type == "Electricity":
+                elec_sensor = sensor
+            elif sensor._fuel_type == "Gas":
+                gas_sensor = sensor
         
+        LOGGER.info(f"Coordinator statistics_sensors currently: {self.statistics_sensors}")
+        LOGGER.info(f"Detected Elec Sensor: {elec_sensor is not None}, Gas Sensor: {gas_sensor is not None}")
+
         async def _backfill_fuel(sensor: GenesisEnergyStatisticsSensor, is_elec: bool):
-            all_data, chunk_days, chunk_delay = [], 4, 2
-            today = datetime.now(timezone.utc).date()
-            for i in range(0, days_to_fetch, chunk_days):
-                end_date = today - timedelta(days=i)
-                start_date = end_date - timedelta(days=chunk_days - 1)
-                
-                LOGGER.info(f"  Fetching {'Elec' if is_elec else 'Gas'} chunk: {start_date:%Y-%m-%d} to {end_date:%Y-%m-%d}")
-                
+            """Core logic to find missing days and fetch data for a single fuel type."""
+            fuel_name = "Electricity" if is_elec else "Gas"
+            LOGGER.info(f"{fuel_name} backfill starting...")
+
+            today = dt_util.now().date()
+            start_date = today - timedelta(days=days_to_fetch - 1)
+            all_desired_dates = {start_date + timedelta(days=x) for x in range(days_to_fetch)}
+            
+            dates_to_fetch = []
+            
+            if force_overwrite:
+                LOGGER.debug(f"[{fuel_name}] Force overwrite is enabled. Will fetch for all days in the period.")
+                dates_to_fetch = sorted(list(all_desired_dates))
+            else:
+                start_datetime = datetime.combine(start_date, datetime.min.time()).replace(tzinfo=timezone.utc)
+                existing_stats = await get_instance(self.hass).async_add_executor_job(
+                    statistics_during_period,
+                    self.hass, start_datetime, None, {sensor._consumption_statistic_id},
+                    "day", None, {"sum"},
+                )
+                existing_dates = set()
+                if sensor._consumption_statistic_id in existing_stats:
+                    for stat in existing_stats[sensor._consumption_statistic_id]:
+                        stat_date = datetime.fromtimestamp(stat['start'], tz=timezone.utc).date()
+                        existing_dates.add(stat_date)
+
+                LOGGER.info(f"[{fuel_name}] Found {len(existing_dates)} days with existing statistics in the last {days_to_fetch} days.")
+                dates_to_fetch = sorted(list(all_desired_dates - existing_dates))
+
+            if today in dates_to_fetch:
+                LOGGER.debug(f"[{fuel_name}] Removing today ({today}) from the fetch list as its data is not yet final.")
+                dates_to_fetch.remove(today)
+
+            if not dates_to_fetch:
+                LOGGER.info(f"[{fuel_name}] No missing past days found to backfill.")
+                return
+
+            all_fetched_data = []
+            api_call = self.api.get_energy_data_for_period if is_elec else self.api.get_gas_data_for_period
+            
+            chunk_size = 4
+            date_chunks = [dates_to_fetch[i:i + chunk_size] for i in range(0, len(dates_to_fetch), chunk_size)]
+
+            for chunk in date_chunks:
+                chunk_start_date = chunk[0].strftime("%Y-%m-%d")
+                chunk_end_date = chunk[-1].strftime("%Y-%m-%d")
+                LOGGER.info(f"  Fetching {fuel_name} chunk: {chunk_start_date} to {chunk_end_date}")
                 try:
-                    res = await (self.api.get_energy_data_for_period if is_elec else self.api.get_gas_data_for_period)(start_date.strftime("%Y-%m-%d"), end_date.strftime("%Y-%m-%d"))
-                    if res and 'usage' in res: all_data.extend(res['usage'])
-                    if (i + chunk_days) < days_to_fetch: await asyncio.sleep(chunk_delay)
-                except Exception as e: LOGGER.error(f"Error fetching backfill chunk: {e}")
-            if all_data:
-                await sensor.async_process_statistics_data(all_data)
+                    res = await api_call(chunk_start_date, chunk_end_date)
+                    if res and 'usage' in res:
+                        all_fetched_data.extend(res['usage'])
+                    await asyncio.sleep(1) 
+                except Exception as e:
+                    LOGGER.error(f"Error fetching backfill chunk for {chunk_start_date} to {chunk_end_date}. Skipping this chunk. Error: {e}")
+
+            if all_fetched_data:
+                await sensor.async_process_statistics_data(all_fetched_data, force_overwrite, start_date=start_date)
+            else:
+                LOGGER.warning(f"[{fuel_name}] Attempted to fetch data but received no data from the API.")
 
         if process_elec and elec_sensor:
             await _backfill_fuel(elec_sensor, is_elec=True)
         if process_gas and gas_sensor:
             await _backfill_fuel(gas_sensor, is_elec=False)
+
+        LOGGER.info(f"Historical backfill complete for '{fuel_type}' ✅")

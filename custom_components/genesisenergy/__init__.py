@@ -1,6 +1,5 @@
 # custom_components/genesisenergy/__init__.py
 
-"""The Genesis Energy integration."""
 import voluptuous as vol
 from zoneinfo import ZoneInfo
 
@@ -21,6 +20,8 @@ from .const import (
 from .coordinator import GenesisEnergyDataUpdateCoordinator
 from .exceptions import CannotConnect, InvalidAuth
 
+ATTR_FORCE_OVERWRITE = "force_overwrite"
+
 SERVICE_SCHEMA_ADD_POWERSHOUT_BOOKING = vol.Schema({
     vol.Required(ATTR_START_DATETIME): cv.datetime,
     vol.Required(ATTR_DURATION_HOURS): vol.All(vol.Coerce(int), vol.Range(min=1, max=4)),
@@ -33,6 +34,7 @@ SERVICE_SCHEMA_ACCEPT_POWERSHOUT_OFFER = vol.Schema({
 SERVICE_SCHEMA_BACKFILL_STATISTICS = vol.Schema({
     vol.Required(ATTR_DAYS_TO_FETCH): vol.All(vol.Coerce(int), vol.Range(min=1, max=730)),
     vol.Required(ATTR_FUEL_TYPE): vol.In(["electricity", "gas", "both"]),
+    vol.Required(ATTR_FORCE_OVERWRITE, default=False): cv.boolean,
 })
 
 SERVICE_SCHEMA_FORCE_UPDATE = vol.Schema({
@@ -41,7 +43,7 @@ SERVICE_SCHEMA_FORCE_UPDATE = vol.Schema({
 
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """Set up Genesis Energy from a config entry."""
-    LOGGER.info(f"Setting up Genesis Energy for entry: {entry.title}")
+    LOGGER.info(f"Setting up Genesis Energy for entry: {entry.title}...")
 
     hass.data.setdefault(DOMAIN, {})
     coordinator = GenesisEnergyDataUpdateCoordinator(hass, entry)
@@ -56,7 +58,10 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         LOGGER.error(f"Unexpected error during first refresh for {entry.title}: {e}", exc_info=True)
         raise ConfigEntryNotReady(f"Initial data fetch failed with an unexpected error: {e}") from e
 
+    LOGGER.info("Setting up platforms...")
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
+    LOGGER.info("Setting up platforms...✅")
+
 
     def get_available_services(coordinator: GenesisEnergyDataUpdateCoordinator) -> tuple[bool, bool]:
         """Checks billing plans and returns a tuple of (has_electricity, has_gas)."""
@@ -212,6 +217,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         """Handle the service call to backfill historical statistics."""
         days = call.data[ATTR_DAYS_TO_FETCH]
         requested_fuel = call.data[ATTR_FUEL_TYPE]
+        force_overwrite = call.data[ATTR_FORCE_OVERWRITE]
 
         has_electricity, has_gas = get_available_services(coordinator)
         
@@ -230,13 +236,13 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         
         if process_fuel == "none":
             LOGGER.warning(
-                "Backfill service called for '%s', but this service is not available on your account. Aborting.",
+                "Backfill service called for '%s', but this service is not available on your account. Aborting.❌",
                 requested_fuel
             )
             return
 
-        LOGGER.info(f"Backfill service proceeding for '{process_fuel}' for {days} days. This will run in the background.")
-        hass.async_create_task(coordinator.async_backfill_statistics_data(days, process_fuel))
+        LOGGER.info(f"Backfill service proceeding for '{process_fuel}' for {days} days (Force Overwrite: {force_overwrite})...")
+        hass.async_create_task(coordinator.async_backfill_statistics_data(days, process_fuel, force_overwrite))
 
     hass.services.async_register(
         DOMAIN, SERVICE_BACKFILL_STATISTICS,
@@ -265,7 +271,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     
     entry.async_on_unload(_unload_services)
     
-    LOGGER.info(f"Genesis Energy setup complete for {entry.data[CONF_EMAIL]}")
+    LOGGER.info(f"Genesis Energy setup complete for {entry.data[CONF_EMAIL]} ✅")
     return True
 
 async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
