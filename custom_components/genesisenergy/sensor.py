@@ -632,11 +632,24 @@ class EstimatedFutureUseSensor(GenesisBillSensor):
 class PowerShoutEligibilitySensor(CoordinatorEntity[GenesisEnergyDataUpdateCoordinator], SensorEntity):
     _attr_has_entity_name = True
     def __init__(self, coordinator: GenesisEnergyDataUpdateCoordinator):
-        super().__init__(coordinator); self._attr_device_info = coordinator.device_info; self.entity_description = SensorEntityDescription(key=SENSOR_KEY_POWERSHOUT_ELIGIBLE, name="Power Shout Eligible", icon="mdi:lightning-bolt-outline"); self._attr_unique_id = f"{coordinator.config_entry.entry_id}_{self.entity_description.key}"
+        super().__init__(coordinator)
+        self._attr_device_info = coordinator.device_info
+        self.entity_description = SensorEntityDescription(
+            key=SENSOR_KEY_POWERSHOUT_ELIGIBLE, 
+            name="Power Shout Eligible", 
+            icon="mdi:lightning-bolt-outline"
+        )
+        self._attr_unique_id = f"{coordinator.config_entry.entry_id}_{self.entity_description.key}"
+    
     @property
-    def native_value(self):
-        if ps_info := self.coordinator.data.get(DATA_API_POWERSHOUT_INFO): return ps_info.get("isEligible")
+    def native_value(self) -> bool | None:
+        """Return True if the account is eligible for Power Shouts."""
+        if ps_info := self.coordinator.data.get(DATA_API_POWERSHOUT_INFO):
+            # Eligibility is now determined by the presence of eligible accounts in the new endpoint data.
+            eligible_accounts = ps_info.get("eligibleBillingAccounts")
+            return isinstance(eligible_accounts, list) and len(eligible_accounts) > 0
         return None
+
 class PowerShoutBalanceSensor(CoordinatorEntity[GenesisEnergyDataUpdateCoordinator], SensorEntity):
     _attr_has_entity_name = True
     def __init__(self, coordinator: GenesisEnergyDataUpdateCoordinator):
@@ -648,13 +661,17 @@ class PowerShoutBalanceSensor(CoordinatorEntity[GenesisEnergyDataUpdateCoordinat
                 try: return float(val)
                 except (ValueError, TypeError): return None
         return None
+
     @property
     def extra_state_attributes(self) -> Mapping[str, Any] | None:
-        attrs = {};
-        if not self.coordinator.data: return None
-        if offers := self.coordinator.data.get(DATA_API_POWERSHOUT_OFFERS, {}): 
+        attrs = {}
+        if not self.coordinator.data:
+            return None
+
+        if offers := self.coordinator.data.get(DATA_API_POWERSHOUT_OFFERS, {}):
             attrs["active_offers_count"] = len(offers.get("activeOffers", []))
             attrs["active_offers"] = offers.get("activeOffers", [])
+
         if expiring := self.coordinator.data.get(DATA_API_POWERSHOUT_EXPIRING):
             if msg := expiring.get("expiringHoursMessage"):
                 template_title = msg.get("title")
@@ -664,15 +681,30 @@ class PowerShoutBalanceSensor(CoordinatorEntity[GenesisEnergyDataUpdateCoordinat
                         attrs["expiring_hours_message"] = template_title.replace("{{0}}", value)
                 elif template_title:
                     attrs["expiring_hours_message"] = template_title
-            if tooltip := expiring.get("messageTooltip", {}).get("description"):
-                attrs["expiring_hours_tooltip"] = tooltip
-        if bookings := self.coordinator.data.get(DATA_API_POWERSHOUT_BOOKINGS, {}):
+            
+            if message_tooltip := expiring.get("messageTooltip"):
+                if isinstance(message_tooltip, dict):
+                    if tooltip_description := message_tooltip.get("description"):
+                        attrs["expiring_hours_tooltip"] = tooltip_description
+
+        if bookings_data := self.coordinator.data.get(DATA_API_POWERSHOUT_BOOKINGS, {}):
+            all_bookings = bookings_data.get("bookings", [])
+            attrs["bookings"] = all_bookings
+            
             utc = ZoneInfo("UTC")
-            upcoming = [b for b in bookings.get("bookings", []) if isinstance(b, dict) and b.get("startDate") and datetime.fromisoformat(b.get("startDate")).astimezone(utc) > dt_util.utcnow()]
+            upcoming = [
+                b for b in all_bookings
+                if isinstance(b, dict) 
+                and b.get("startDateTime") 
+                and datetime.fromisoformat(b.get("startDateTime")).astimezone(utc) > dt_util.utcnow()
+            ]
+            
             if upcoming: 
-                upcoming.sort(key=lambda b: b["startDate"])
-                attrs["next_booking_start"] = upcoming[0].get("startDate")
+                upcoming.sort(key=lambda b: b["startDateTime"])
+                attrs["next_booking_start"] = upcoming[0].get("startDateTime")
+        
         return attrs
+
 class GenesisEnergyAccountSensor(CoordinatorEntity[GenesisEnergyDataUpdateCoordinator], SensorEntity):
     _attr_has_entity_name = True
 

@@ -279,14 +279,52 @@ class GenesisEnergyApi:
     async def get_gas_data_for_period(self, start_date_str: str, end_date_str: str):
         params = {'startDate': start_date_str, 'endDate': end_date_str, 'intervalType': "HOURLY"}
         return await self._make_api_call("GET", "/v2/private/naturalgas/advanced/usage", params=params, description=f"gas usage for {start_date_str}-{end_date_str}")
-    async def get_powershout_info(self): return await self._make_api_call("GET", "/v2/private/powershoutcurrency", description="Power Shout info")
+    async def get_powershout_info(self): return await self._make_api_call("GET", "/v2/private/powershoutcurrency/eligible/accounts", description="Power Shout eligible accounts info")
     async def get_powershout_balance(self): return await self._make_api_call("GET", "/v2/private/powershoutcurrency/balance", description="Power Shout balance")
     async def get_powershout_bookings(self): return await self._make_api_call("GET", "/v2/private/powershoutcurrency/bookings", description="Power Shout bookings")
     async def get_powershout_offers(self): return await self._make_api_call("GET", "/v2/private/powershoutcurrency/offers", description="Power Shout offers")
     async def get_powershout_expiring_hours(self): return await self._make_api_call("GET", "/v2/private/powershoutcurrency/expiringHours", description="Power Shout expiring")
-    async def add_powershout_booking(self, start_date_str: str, duration: int, supply_agreement_id: str, supply_point_id: str, loyalty_account_id: str):
-        payload = {"startDate": start_date_str, "supplyAgreementId": supply_agreement_id, "duration": duration, "supplyPointId": supply_point_id, "loyaltyAccountId": loyalty_account_id}
-        return await self._make_api_call("POST", "/v2/private/powershoutcurrency/booking/add", json_payload=payload, description="add Power Shout booking", expect_json=False)
+
+    async def get_powershout_vouchers_for_date(self, selected_date_str: str, supply_point_id: str):
+        """Gets available Power Shout vouchers for a specific date."""
+        params = {
+            "selectedDate": selected_date_str,
+            "supplyPointId": supply_point_id,
+        }
+        return await self._make_api_call(
+            "GET",
+            "/v2/private/powershoutcurrency/bookings",
+            params=params,
+            description="Power Shout vouchers for date",
+        )
+
+    async def add_powershout_booking(
+        self,
+        start_date_str: str,
+        duration: int,
+        supply_agreement_id: str,
+        supply_point_id: str,
+        loyalty_account_id: str,
+        eco_hours: list,
+        vouchers: list,
+    ):
+        """Adds a Power Shout booking."""
+        payload = {
+            "startDate": start_date_str,
+            "supplyAgreementId": supply_agreement_id,
+            "duration": duration,
+            "supplyPointId": supply_point_id,
+            "loyaltyAccountId": loyalty_account_id,
+            "ecoHours": eco_hours,
+            "vouchers": vouchers,
+        }
+        return await self._make_api_call(
+            "POST",
+            "/v2/private/powershoutcurrency/booking/add",
+            json_payload=payload,
+            description="add Power Shout booking",
+            expect_json=False,
+        )
     
     async def accept_powershout_offer(
         self,

@@ -84,74 +84,95 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     async def async_add_powershout_booking_service(call: ServiceCall) -> None:
         """Handle the service call to add a Power Shout booking."""
         start_dt_raw = call.data[ATTR_START_DATETIME]
-        duration = call.data[ATTR_DURATION_HOURS]
+        requested_duration = call.data[ATTR_DURATION_HOURS]
 
-        start_dt = start_dt_raw.replace(minute=0, second=0, microsecond=0)
-        LOGGER.info(
-            f"Power Shout booking requested for {start_dt_raw}. "
-            f"Flooring to hour start time: {start_dt}"
-        )
-
-        LOGGER.info(f"Attempting to book Power Shout for {duration} hour(s) starting at {start_dt}")
+        base_start_dt = start_dt_raw.replace(minute=0, second=0, microsecond=0)
+        LOGGER.info(f"Attempting to book Power Shout for {requested_duration} hour(s) starting at {base_start_dt}")
 
         ps_info = coordinator.data.get(DATA_API_POWERSHOUT_INFO)
 
-        if not ps_info or not all(k in ps_info for k in ['supplyAgreementId', 'supplyPointId', 'loyaltyAccountId']):
+        supply_agreement_id, supply_point_id, loyalty_account_id = None, None, None
+        try:
+            loyalty_account_id = ps_info.get("loyaltyAccountId")
+            supply_point_data = ps_info["eligibleBillingAccounts"][0]["billingAccountSites"][0]["supplyPoints"][0]
+            supply_agreement_id = supply_point_data.get("supplyAgreementId")
+            supply_point_id = supply_point_data.get("id")
+        except (KeyError, IndexError, TypeError):
+            pass
+
+        if not all([supply_agreement_id, supply_point_id, loyalty_account_id]):
             LOGGER.error("Could not book Power Shout: Missing required IDs. Please try again after the next update.")
             async_create(
-                hass,
-                "Could not book Power Shout: Required information is missing. Please wait a minute and try again.",
-                title="Genesis Energy Power Shout Failed",
-                notification_id="genesis_powershout_error"
+                hass, "Could not book Power Shout: Required information is missing.",
+                title="Genesis Energy Power Shout Failed", notification_id="genesis_powershout_error"
             )
             return
 
-        supply_agreement_id = ps_info['supplyAgreementId']
-        supply_point_id = ps_info['supplyPointId']
-        loyalty_account_id = ps_info['loyaltyAccountId']
-
-        start_date_str = start_dt.astimezone(ZoneInfo("UTC")).strftime('%Y-%m-%dT%H:%M:%S.000Z')
-
+        successful_bookings = 0
         try:
-            success = await coordinator.api.add_powershout_booking(
-                start_date_str=start_date_str,
-                duration=duration,
-                supply_agreement_id=supply_agreement_id,
-                supply_point_id=supply_point_id,
-                loyalty_account_id=loyalty_account_id
-            )
+            selected_date_for_vouchers = base_start_dt.astimezone(ZoneInfo("UTC")).strftime('%Y-%m-%dT00:00:00.000Z')
+            voucher_data = await coordinator.api.get_powershout_vouchers_for_date(selected_date_for_vouchers, supply_point_id)
+            
+            available_vouchers = []
+            if voucher_data and isinstance(voucher_data.get("vouchers"), list):
+                available_vouchers = voucher_data["vouchers"]
+            num_existing_bookings = len(voucher_data.get("bookings", [])) if voucher_data else 0
+            
+            for i in range(requested_duration):
+                current_hour_dt = base_start_dt + timedelta(hours=i)
+                start_date_str = current_hour_dt.strftime('%Y-%m-%dT%H:%M:%S')
 
-            if success:
-                LOGGER.info("Successfully booked Power Shout.")
+                voucher_index = num_existing_bookings + i
+                if voucher_index >= len(available_vouchers):
+                    LOGGER.error(f"Not enough vouchers available to book the full duration. "
+                                 f"Booked {successful_bookings} hour(s) successfully.")
+                    break 
+
+                voucher_to_use = [available_vouchers[voucher_index]]
+                LOGGER.debug(f"For hour {i+1}/{requested_duration}, using voucher: {voucher_to_use[0]}")
+
+                eco_hours = [{"hour": current_hour_dt.hour, "ecoFriendly": False}]
+
+                success = await coordinator.api.add_powershout_booking(
+                    start_date_str=start_date_str,
+                    duration=1, 
+                    supply_agreement_id=supply_agreement_id,
+                    supply_point_id=supply_point_id,
+                    loyalty_account_id=loyalty_account_id,
+                    eco_hours=eco_hours,
+                    vouchers=voucher_to_use,
+                )
+
+                if success:
+                    successful_bookings += 1
+                    await asyncio.sleep(1) 
+                else:
+                    LOGGER.error(f"Failed to book hour {i+1} of {requested_duration}. Stopping.")
+                    break
+
+            if successful_bookings > 0:
+                time_str = base_start_dt.strftime('%-I:%M %p')
+                plural_s = "s" if successful_bookings > 1 else ""
+                LOGGER.info(f"Successfully booked {successful_bookings} hour{plural_s} of Power Shout.")
                 async_create(
-                    hass,
-                    f"Your {duration}-hour Power Shout starting at {start_dt.strftime('%-I:%M %p')} has been booked successfully.",
-                    title="Genesis Energy Power Shout Booked",
-                    notification_id="genesis_powershout_success"
+                    hass, f"Your {successful_bookings}-hour Power Shout starting at {time_str} has been booked.",
+                    title="Genesis Energy Power Shout Booked", notification_id="genesis_powershout_success"
                 )
                 await coordinator.async_request_refresh()
-            else:
-                LOGGER.error("Failed to book Power Shout. The API call was unsuccessful.")
-                async_create(
-                    hass,
-                    "The Power Shout booking failed. The API reported an issue. Check logs for details.",
-                    title="Genesis Energy Power Shout Failed",
-                    notification_id="genesis_powershout_error"
-                )
+            
+            if successful_bookings < requested_duration:
+                 LOGGER.error("Could not complete the full booking request.")
+                 if successful_bookings == 0: 
+                    async_create(
+                        hass, "The Power Shout booking failed. Check logs for details.",
+                        title="Genesis Energy Power Shout Failed", notification_id="genesis_powershout_error"
+                    )
 
         except (CannotConnect, InvalidAuth) as e:
             LOGGER.error(f"Failed to book Power Shout due to an API error: {e}")
-            async_create(
-                hass, f"The Power Shout booking failed due to an API error: {e}",
-                title="Genesis Energy Power Shout Failed", notification_id="genesis_powershout_error"
-            )
-        except Exception as e:
+        except Exception:
             LOGGER.exception("An unexpected error occurred while booking Power Shout.")
-            async_create(
-                hass, f"An unexpected error occurred: {e}",
-                title="Genesis Energy Power Shout Failed", notification_id="genesis_powershout_error"
-            )
-
+    
     hass.services.async_register(
         DOMAIN, SERVICE_ADD_POWERSHOUT_BOOKING,
         async_add_powershout_booking_service,
