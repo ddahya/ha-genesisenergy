@@ -626,7 +626,7 @@ class PowerShoutBalanceSensor(CoordinatorEntity[GenesisEnergyDataUpdateCoordinat
                         attrs["expiring_hours_message"] = template_title.replace("{{0}}", value)
                 elif template_title:
                     attrs["expiring_hours_message"] = template_title
-            if tooltip := expiring.get("messageTooltip", {}).get("description"):
+            if tooltip := (expiring.get("messageTooltip") or {}).get("description"):
                 attrs["expiring_hours_tooltip"] = tooltip
         if bookings := self.coordinator.data.get(DATA_API_POWERSHOUT_BOOKINGS, {}):
             utc = ZoneInfo("UTC")
