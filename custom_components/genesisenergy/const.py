@@ -15,6 +15,8 @@ PLATFORMS: Final = ["sensor", "binary_sensor"]
 CONF_EMAIL: Final = "email"
 CONF_PASSWORD: Final = "password"
 DEFAULT_SCAN_INTERVAL_HOURS: Final = 1
+CONF_ENABLE_AUTO_CORRECTION = "enable_auto_correction"
+DAILY_OVERWRITE_HOUR = 13
 
 # --- API Data Keys for Coordinator ---
 DATA_API_ELECTRICITY_USAGE: Final = "api_electricity_usage"

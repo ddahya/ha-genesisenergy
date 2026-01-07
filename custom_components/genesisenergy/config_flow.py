@@ -7,7 +7,8 @@ from homeassistant.const import CONF_EMAIL, CONF_PASSWORD
 import homeassistant.helpers.config_validation as cv
 
 from .api import GenesisEnergyApi
-from .const import DOMAIN, INTEGRATION_NAME
+from homeassistant.core import callback
+from .const import DOMAIN, INTEGRATION_NAME, CONF_ENABLE_AUTO_CORRECTION
 from .exceptions import InvalidAuth, CannotConnect
 
 _LOGGER = logging.getLogger(__name__)
@@ -15,6 +16,11 @@ _LOGGER = logging.getLogger(__name__)
 class GenesisEnergyConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
     """Handle a config flow for Genesis Energy."""
     VERSION = 1
+
+    @staticmethod
+    @callback
+    def async_get_options_flow(config_entry):
+        return GenesisEnergyOptionsFlow(config_entry)
 
     async def async_step_user(self, user_input: dict | None = None):
         errors: dict[str, str] = {}
@@ -48,4 +54,28 @@ class GenesisEnergyConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                 vol.Required(CONF_PASSWORD): cv.string,
             }),
             errors=errors,
+        )
+
+class GenesisEnergyOptionsFlow(config_entries.OptionsFlow):
+    """Handle options for the Genesis Energy integration."""
+
+    def __init__(self, config_entry: config_entries.ConfigEntry) -> None:
+        """Initialize options flow."""
+        # NOTE: In recent HA versions, self.config_entry is a property and cannot be set.
+        # We simply pass here; the property will work automatically in async_step_init.
+        pass
+
+    async def async_step_init(self, user_input: dict | None = None):
+        """Manage the options."""
+        if user_input is not None:
+            return self.async_create_entry(title="", data=user_input)
+
+        # Default is False (Disabled)
+        current_value = self.config_entry.options.get(CONF_ENABLE_AUTO_CORRECTION, False)
+
+        return self.async_show_form(
+            step_id="init",
+            data_schema=vol.Schema({
+                vol.Optional(CONF_ENABLE_AUTO_CORRECTION, default=current_value): bool,
+            }),
         )

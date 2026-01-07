@@ -16,7 +16,7 @@ from homeassistant.util import dt as dt_util
 
 from homeassistant.components.recorder import get_instance
 from homeassistant.components.recorder.models import StatisticData, StatisticMetaData
-from homeassistant.components.recorder.statistics import async_add_external_statistics, get_last_statistics, statistics_during_period
+from homeassistant.components.recorder.statistics import async_add_external_statistics, get_last_statistics, statistics_during_period, async_import_statistics
 
 from .const import (
     DOMAIN, LOGGER, DATA_API_ELECTRICITY_USAGE, DATA_API_GAS_USAGE, DATA_API_POWERSHOUT_INFO,
@@ -38,7 +38,7 @@ from .const import (
     DATA_API_USAGE_BREAKDOWN, SENSOR_KEY_BREAKDOWN_APPLIANCES, SENSOR_KEY_BREAKDOWN_ELECTRONICS,
     SENSOR_KEY_BREAKDOWN_LIGHTING, SENSOR_KEY_BREAKDOWN_OTHER, DATA_API_LPG_DETAILS, SENSOR_KEY_LPG_DETAILS,
     SENSOR_KEY_LPG_ORDER_STATUS, SENSOR_KEY_LPG_DELIVERY_HISTORY, SENSOR_KEY_LPG_DELIVERY_SUMMARY, DATA_API_LPG_ORDER_STATUS,
-    DATA_API_LPG_DELIVERY_HISTORY, DATA_API_LPG_DELIVERY_SUMMARY, DATA_API_LPG_DETAILS
+    DATA_API_LPG_DELIVERY_HISTORY, DATA_API_LPG_DELIVERY_SUMMARY, DATA_API_LPG_DETAILS, CONF_ENABLE_AUTO_CORRECTION, DAILY_OVERWRITE_HOUR
 )
 from .coordinator import GenesisEnergyDataUpdateCoordinator
 
@@ -175,6 +175,7 @@ class GenesisEnergyStatisticsSensor(CoordinatorEntity[GenesisEnergyDataUpdateCoo
         self._consumption_statistic_name, self._cost_statistic_name = f"Genesis {fuel_type} Consumption Daily", f"Genesis {fuel_type} Cost Daily"
         self._unit, self._currency, self._processed_data_hash = "kWh", "NZD", None
         self._utc_tz = ZoneInfo("UTC")
+        self._last_daily_override_date: date | None = None
 
     @property
     def native_value(self) -> str:
@@ -184,14 +185,51 @@ class GenesisEnergyStatisticsSensor(CoordinatorEntity[GenesisEnergyDataUpdateCoo
 
     @callback
     def _handle_coordinator_update(self) -> None:
-        if not self.coordinator.last_update_success: self.async_write_ha_state(); return
+        """Handle coordinator updates, triggering a daily overwrite or hourly append."""
+        if not self.coordinator.last_update_success:
+            self.async_write_ha_state()
+            return
+
         if api_data := self.coordinator.data.get(self._data_key):
             if raw_usage_list := api_data.get('usage'):
                 if isinstance(raw_usage_list, list) and raw_usage_list:
+                    
+                    now_local = dt_util.now()
+                    today_local = now_local.date()
+                    force_daily_overwrite = False
+
+                    # 1. Get the user's setting (Defaults to False)
+                    auto_correction_enabled = self.coordinator.config_entry.options.get(
+                        CONF_ENABLE_AUTO_CORRECTION, False
+                    )
+
+                    # 2. Check: Is it Enabled? AND Is it after 1PM? AND Has it not run today?
+                    if (
+                        auto_correction_enabled 
+                        and now_local.hour >= DAILY_OVERWRITE_HOUR 
+                        and (self._last_daily_override_date is None or self._last_daily_override_date < today_local)
+                    ):
+                        force_daily_overwrite = True
+                        self._last_daily_override_date = today_local
+
                     current_hash = (len(raw_usage_list), raw_usage_list[0].get('startDate'), raw_usage_list[-1].get('startDate'))
-                    if self._processed_data_hash != current_hash:
-                        self.hass.async_create_task(self.async_process_statistics_data(list(raw_usage_list)))
+                    if self._processed_data_hash != current_hash or force_daily_overwrite:
+                        
+                        # <-- ADD THIS BLOCK FOR BETTER LOGGING -->
+                        if force_daily_overwrite:
+                            LOGGER.info(f"[{self._fuel_type}] Triggering scheduled daily statistic overwrite.")
+                        else:
+                            LOGGER.info(f"[{self._fuel_type}] New data detected, triggering standard statistic append.")
+                        # <-- END OF BLOCK -->
+
+                        self.hass.async_create_task(
+                            self.async_process_statistics_data(
+                                list(raw_usage_list), 
+                                force_overwrite=force_daily_overwrite
+                            )
+                        )
                         self._processed_data_hash = current_hash
+                        
         self.async_write_ha_state()
 
     async def async_process_statistics_data(self, usage_data: list, force_overwrite: bool = False, start_date: date | None = None):
@@ -200,27 +238,40 @@ class GenesisEnergyStatisticsSensor(CoordinatorEntity[GenesisEnergyDataUpdateCoo
             sorted_usage_data = sorted(usage_data, key=lambda x: x['startDate'])
         except (KeyError, TypeError): return
         
-        LOGGER.info(f"  Processing {len(usage_data)} entries for {self._fuel_type}")
+        LOGGER.info(f"  Processing {len(usage_data)} entries for {self._fuel_type} (Force Overwrite: {force_overwrite})")
 
         async def _process_one_statistic(statistic_id: str, stat_name: str, unit: str, value_key: str):
             running_sum = 0.0
             last_ts = 0
+            
+            if force_overwrite:
+                if start_date:
+                    start_of_window = datetime.combine(start_date, datetime.min.time()).replace(tzinfo=timezone.utc)
+                else: 
+                    try:
+                        latest_api_entry_dt = datetime.fromisoformat(sorted_usage_data[-1]['startDate']).astimezone(self._utc_tz)
+                        latest_api_date = latest_api_entry_dt.date()
+                        today_utc = dt_util.utcnow().date()
+                        days_behind = (today_utc - latest_api_date).days
+                        overwrite_days = max(2, days_behind + 1)
+                        
+                        LOGGER.info(f"[{self._fuel_type}] Latest API data is from {days_behind} day(s) ago. Using a {overwrite_days}-day overwrite window.")
+                        start_of_window = dt_util.utcnow().replace(hour=0, minute=0, second=0, microsecond=0) - timedelta(days=overwrite_days)
 
-            if force_overwrite and start_date:
-                start_datetime = datetime.combine(start_date, datetime.min.time()).replace(tzinfo=timezone.utc)
-                stats = await get_instance(self.hass).async_add_executor_job(
+                    except (IndexError, KeyError, ValueError):
+                        LOGGER.warning(f"[{self._fuel_type}] Could not determine data lag, falling back to a 3-day overwrite window.")
+                        start_of_window = dt_util.utcnow().replace(hour=0, minute=0, second=0, microsecond=0) - timedelta(days=3)
+                last_stats_before_window = await get_instance(self.hass).async_add_executor_job(
                     statistics_during_period,
-                    self.hass,
-                    start_datetime - timedelta(days=30), 
-                    start_datetime,
-                    {statistic_id},
-                    "hour",
-                    None,
-                    {"sum"},
+                    self.hass, start_of_window - timedelta(days=1), start_of_window, {statistic_id},
+                    "hour", None, {"sum"},
                 )
-                if stats and statistic_id in stats and stats[statistic_id]:
-                    last_stat_before_period = stats[statistic_id][-1]
-                    running_sum = float(last_stat_before_period.get('sum', 0.0))
+                
+                if statistic_id in last_stats_before_window and last_stats_before_window[statistic_id]:
+                    last_stat = last_stats_before_window[statistic_id][-1]
+                    running_sum = float(last_stat.get('sum', 0.0))
+                    last_ts = last_stat.get('start', 0)
+
             else:
                 last_stat_list = await get_instance(self.hass).async_add_executor_job(
                     get_last_statistics, self.hass, 1, statistic_id, True, {"sum"}
@@ -238,19 +289,16 @@ class GenesisEnergyStatisticsSensor(CoordinatorEntity[GenesisEnergyDataUpdateCoo
                     start_ts = start_dt_utc.timestamp()
                 except (KeyError, ValueError, TypeError): continue
                 
-                if force_overwrite or start_ts > last_ts:
+                if start_ts > last_ts:
                     running_sum += value
                     stats_to_add.append(StatisticData(start=start_dt_utc, state=round(value, 2), sum=round(running_sum, 2)))
             
             if stats_to_add:
-                if force_overwrite:
-                    LOGGER.info(f"  Importing {len(stats_to_add)} '{stat_name}' statistics with overwrite enabled.")
-                else:
-                    LOGGER.info(f"  Imported {len(stats_to_add)} new '{stat_name}' statistics.")
-                
+                mode_str = "Overwrite" if force_overwrite else "Append"
+                LOGGER.info(f"  Importing {len(stats_to_add)} '{stat_name}' statistics (Mode: {mode_str}).")
                 meta = StatisticMetaData(has_mean=False, has_sum=True, name=stat_name, source=DOMAIN, statistic_id=statistic_id, unit_of_measurement=unit)
                 async_add_external_statistics(self.hass, meta, stats_to_add)
-
+                # async_import_statistics(self.hass, meta, stats_to_add)
             else:
                  LOGGER.info(f"  No new data to import for '{stat_name}' (all data was older or the same as existing).")
         

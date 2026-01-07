@@ -1,7 +1,9 @@
 # custom_components/genesisenergy/__init__.py
 
+import asyncio
 import voluptuous as vol
 from zoneinfo import ZoneInfo
+from datetime import timedelta 
 
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant, ServiceCall, callback
@@ -292,6 +294,8 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     
     entry.async_on_unload(_unload_services)
     
+    entry.async_on_unload(entry.add_update_listener(async_update_options))
+
     LOGGER.info(f"Genesis Energy setup complete for {entry.data[CONF_EMAIL]} ✅")
     return True
 
@@ -303,3 +307,7 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             await hass.data[DOMAIN][entry.entry_id].api.close()
             hass.data[DOMAIN].pop(entry.entry_id)
     return unload_ok
+
+async def async_update_options(hass: HomeAssistant, entry: ConfigEntry) -> None:
+    """Reload entry on options update."""
+    await hass.config_entries.async_reload(entry.entry_id)
