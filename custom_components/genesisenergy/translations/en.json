@@ -1,0 +1,34 @@
+{
+    "config": {
+        "abort": {
+            "already_configured": "Account is already configured"
+        },
+        "error": {
+            "cannot_connect": "Failed to connect",
+            "invalid_auth": "Invalid authentication",
+            "unknown": "Unexpected error"
+        },
+        "step": {
+            "user": {
+                "title": "Genesis Energy",
+                "description": "Enter your My Genesis login details.",
+                "data": {
+                    "email": "Email Address",
+                    "password": "Password"
+                }
+            }
+        }
+    },
+    "options": {
+        "step": {
+            "init": {
+                "title": "Data Synchronisation Settings",
+                "description": "Genesis Energy Electricity and GAS data is often delayed by 24-48 hours.\n\n**Daily Auto-Correction**\nWhen enabled, this integration will perform a special synchronisation every day after **1:00 PM**. It will re-download and **overwrite** the statistics for the last few days to fill in gaps and correct temporary estimates provided by Genesis.\n\nEnable this if you see missing data or inconsistencies in your Energy Dashboard.",
+                "data": {
+                    "enable_auto_correction": "Enable Daily Auto-Correction"
+                }
+            }
+        }
+    }
+
+}

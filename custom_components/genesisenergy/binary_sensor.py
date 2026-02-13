@@ -44,7 +44,7 @@ class PowerShoutOffersAvailableBinarySensor(
     @property
     def is_on(self) -> bool:
         """Return True if there are active offers."""
-        data = self.coordinator.data.get(DATA_API_POWERSHOUT_BALANCE, {})
+        data = self.coordinator.data.get(DATA_API_POWERSHOUT_BALANCE) or {}
         count = data.get("active_offers_count", 0)
         return count > 0
 
