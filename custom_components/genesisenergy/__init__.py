@@ -90,13 +90,29 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
         base_start_dt = start_dt_raw.replace(minute=0, second=0, microsecond=0)
         LOGGER.info(f"Attempting to book Power Shout for {requested_duration} hour(s) starting at {base_start_dt}")
-
+# Fix: honour isSelectedSite for Power Shout bookings
+# Power Shout bookings previously always used eligibleBillingAccounts[0]. Now uses the user's selected site (matching webSelectedSite), with fallback to [0] if none is flagged.
         ps_info = coordinator.data.get(DATA_API_POWERSHOUT_INFO)
 
         supply_agreement_id, supply_point_id, loyalty_account_id = None, None, None
         try:
             loyalty_account_id = ps_info.get("loyaltyAccountId")
-            supply_point_data = ps_info["eligibleBillingAccounts"][0]["billingAccountSites"][0]["supplyPoints"][0]
+            
+            # Find the account marked as the user's currently selected site
+            # (matches webSelectedSite from the Genesis web portal)
+            supply_point_data = None
+            for account in ps_info.get("eligibleBillingAccounts", []):
+                for site in account.get("billingAccountSites", []):
+                    if site.get("isSelectedSite") is True:
+                        supply_point_data = site["supplyPoints"][0]
+                        break
+                if supply_point_data:
+                    break
+            
+            # Fallback to first eligible account if none flagged as selected
+            if not supply_point_data:
+                supply_point_data = ps_info["eligibleBillingAccounts"][0]["billingAccountSites"][0]["supplyPoints"][0]
+            
             supply_agreement_id = supply_point_data.get("supplyAgreementId")
             supply_point_id = supply_point_data.get("id")
         except (KeyError, IndexError, TypeError):
