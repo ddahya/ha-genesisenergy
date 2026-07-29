@@ -7,7 +7,7 @@ from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
 from .const import (
     DOMAIN,
-    DATA_API_POWERSHOUT_BALANCE,
+    DATA_API_POWERSHOUT_OFFERS,
 )
 from .coordinator import GenesisEnergyDataUpdateCoordinator
 
@@ -20,7 +20,8 @@ async def async_setup_entry(
 
     entities: list[BinarySensorEntity] = []
 
-    if coordinator.data.get(DATA_API_POWERSHOUT_BALANCE) is not None:
+    # Check for offers data instead of balance data
+    if coordinator.data.get(DATA_API_POWERSHOUT_OFFERS) is not None:
         entities.append(PowerShoutOffersAvailableBinarySensor(coordinator))
 
     async_add_entities(entities)
@@ -44,11 +45,11 @@ class PowerShoutOffersAvailableBinarySensor(
     @property
     def is_on(self) -> bool:
         """Return True if there are active offers."""
-        data = self.coordinator.data.get(DATA_API_POWERSHOUT_BALANCE) or {}
-        count = data.get("active_offers_count", 0)
-        return count > 0
+        data = self.coordinator.data.get(DATA_API_POWERSHOUT_OFFERS) or {}
+        active_offers = data.get("activeOffers", [])
+        return len(active_offers) > 0
 
     @property
     def extra_state_attributes(self) -> dict | None:
-        """Expose the raw balance data for debugging and dashboards."""
-        return self.coordinator.data.get(DATA_API_POWERSHOUT_BALANCE, {})
+        """Expose the raw offers data for debugging and dashboards."""
+        return self.coordinator.data.get(DATA_API_POWERSHOUT_OFFERS, {})
