@@ -1,206 +1,394 @@
 # Genesis Energy Integration for Home Assistant
 
-This is a custom component for Home Assistant to integrate with Genesis Energy (New Zealand). It fetches your hourly electricity and gas consumption, costs, forecasts, usage breakdowns, Power Shout details, and other account information, making it available within Home Assistant.
+[![hacs_badge](https://img.shields.io/badge/HACS-Custom-41BDF5.svg)](https://github.com/hacs/default)
 
-This integration is built by reverse-engineering the Genesis Energy web portal and is not officially supported by Genesis. It may break if Genesis changes their website or APIs.
+A custom integration for Home Assistant to connect with Genesis Energy (New Zealand). It automatically retrieves hourly electricity and gas usage, daily costs, forecasts, category breakdowns, LPG details, EV plan savings, Power Shout balances/offers, and billing information.
 
-![Energy Useage PNG](/homeassistant-energy-graph.png "Energy Dashboard Reporting")
+![Energy Dashboard Reporting](/homeassistant-energy-graph.png "Energy Dashboard Reporting")
 
-## Features
+---
 
-*   **Energy Dashboard Integration:**
-    *   Creates long-term statistics for **Electricity Consumption (kWh)** and **Gas Consumption (kWh)**.
-    *   Also creates statistics for daily **Electricity Cost (NZD)** and **Gas Cost (NZD)** for detailed tracking.
-*   **LPG (Bottled Gas) Integration:**
-    *   Automatically detects your LPG accounts and adds detailed information to new sensor.genesis_energy_lpg_details sensor.
-    *  The attributes contains your Order Status, full Delivery History, and a Usage Summary with statistics like average days between deliveries.
-*   **Electricity Forecast Sensors:**
-    *   Integrates Genesis's daily and weekly electricity forecast.
-    *   `Today's Forecast Usage (kWh)` and `Today's Forecast Cost ($)` sensors.
-    *   Attributes include the predicted high/low range and the full 7-day forecast data, perfect for advanced automations.
-*   **Usage Breakdown Sensors:**
-    *   Shows how Genesis categorizes your electricity use from your last completed billing period.
-    *   Creates sensors for `Appliances`, `Electronics`, `Lighting`, and `Other` usage (in kWh).
-    *   Ideal for creating historical pie or bar charts to see where your energy goes.
-*   **EV Plan Sensors:**
-    *   If you're on an EV plan, it automatically creates sensors for your daily **Day (Peak) Usage/Cost** and **Night (Off-Peak) Usage/Cost**.
-    *   A "Savings" sensor shows how much you saved on your last full day of usage compared to the standard rate.
-*   **Power Shout Sensors:**
-    *   Sensors for Power Shout **Eligibility** and current **Balance** (in hours).
-    *   Attributes include details on upcoming bookings, active offers, and expiring hours.
-*   **Billing Cycle Sensors:**
-    *   Provides sensors for costs within your current billing cycle: `Electricity Used ($)`, `Gas Used ($)`, `Total Used ($)`, `Estimated Total Bill ($)`, and `Estimated Future Use ($)`.
-*   **Detailed Account Sensor:**
-    *   A single `sensor.genesis_energy_account_details` entity with a wealth of information in its attributes, including your billing plans, account IDs, and raw data from various dashboard widgets.
-*   **Powerful Services:**
-    *   `genesisenergy.add_powershout_booking`: Book your Power Shouts from automations or scripts.
-    *   `genesisenergy.accept_powershout_offer`: Accept any available Power Shout offers.
-    *   `genesisenergy.backfill_statistics`: A powerful tool to import historical usage data into Home Assistant.
-    *   `genesisenergy.force_update`: Trigger an immediate data refresh.
+## ✨ Features
 
-## Installation
+* 📊 **Energy Dashboard Integration:**
+  * Tracks **Electricity Consumption (kWh)** and **Gas Consumption (kWh)** for long-term statistics.
+  * Tracks daily **Electricity Cost (NZD)** and **Gas Cost (NZD)** for detailed budget monitoring.
+* 🛠️ **Automatic Data Correction (Options Flow):**
+  * Built-in option to schedule a daily automatic statistic overwrite after 1:00 PM to fix delayed or missing hourly data reported by Genesis.
+* 🏠 **Multi-Property & Multi-Account Support:**
+  * Automatically respects your active property selection (`webSelectedSite`) from the Genesis web portal across sensors and Power Shout bookings.
+* 🍾 **LPG (Bottled Gas) Details:**
+  * Detects LPG accounts and exposes order status, delivery history, and usage summary statistics via `sensor.genesis_energy_lpg_details`.
+* ⚡ **Electricity Forecast Sensors:**
+  * Exposes `Today's Forecast Usage (kWh)` and `Today's Forecast Cost ($)`.
+  * Extra attributes provide predicted high/low ranges and full 7-day forecast data.
+* 🔌 **EV Plan Sensors:**
+  * For EV Plan accounts, creates daily sensors for **Day (Peak) Usage/Cost**, **Night (Off-Peak) Usage/Cost**, and a **Savings ($)** sensor comparing off-peak rates to standard rates.
+* 🏷️ **Usage Breakdown Sensors:**
+  * Categorizes electricity consumption by `Appliances`, `Electronics`, `Lighting`, and `Other` (in kWh).
+* 🎁 **Power Shout Management:**
+  * Sensors for **Eligibility**, **Balance (Hours)**, and **Offers Available** (`binary_sensor.genesis_energy_power_shout_offers_available`).
+  * Attributes track active offers, expiring hours, and upcoming bookings.
+* 💳 **Billing Cycle Sensors:**
+  * `Electricity Used ($)`, `Gas Used ($)`, `Total Used ($)`, `Estimated Total Bill ($)`, and `Estimated Future Use ($)`.
+* 📋 **Account Details Entity:**
+  * Single comprehensive entity (`sensor.genesis_energy_account_details`) exposing billing plan information and widget data.
 
-### HACS (recommended)
+---
 
-1. [Install HACS](https://www.hacs.xyz/docs/use/download/download/), if you did not already
-2. [![Open your Home Assistant instance and open a repository inside the Home Assistant Community Store.](https://my.home-assistant.io/badges/hacs_repository.svg)](https://my.home-assistant.io/redirect/hacs_repository/?owner=DDahya&repository=ha-genesisenergy&category=integration)
-3. Install the Genesis Energy integration
-4. Restart Home Assistant
+## 💾 Installation
 
-### Manual Installation
+### Option 1: HACS (Recommended)
 
-1.  Copy the `genesisenergy` folder from this repository into your Home Assistant `custom_components` folder.
-    (Path: `<config_dir>/custom_components/genesisenergy/`)
-2.  **Restart Home Assistant.**
+1. Ensure [HACS](https://hacs.xyz/) is installed.
+2. Go to **HACS > Integrations**.
+3. Click the three dots in the top right corner and select **Custom repositories**.
+4. Add `https://github.com/ddahya/ha-genesisenergy` as an **Integration**.
+5. Search for "Genesis Energy", click **Download**, and restart Home Assistant.
 
-## Configuration
+### Option 2: Manual Installation
 
-1.  Go to **Settings > Devices & Services**.
-2.  Click **+ ADD INTEGRATION** and search for "Genesis Energy".
-3.  Enter your Genesis Energy **Email** and **Password**. These are the same credentials you use for the [Genesis Energy My Account portal](https://myaccount.genesisenergy.co.nz/).
-4.  Click **SUBMIT**. The integration will set up a device and all associated sensors.
+1. Download this repository.
+2. Copy the `custom_components/genesisenergy` folder into your Home Assistant `<config_dir>/custom_components/` directory.
+3. **Restart Home Assistant.**
 
-## Using with the Energy Dashboard
+---
 
-This integration creates long-term statistics that can be used to populate your Energy Dashboard.
+## ⚙️ Configuration & Options
 
-**Important:** The integration will **not** import any data on the very first startup. This is to give you a chance to run a historical backfill first. To populate your statistics for the first time, you must call either the `genesisenergy.force_update` or `genesisenergy.backfill_statistics` service.
+1. Go to **Settings > Devices & Services**.
+2. Click **+ Add Integration** and search for **Genesis Energy**.
+3. Enter your Genesis Energy **Email** and **Password** (same credentials used for [Genesis My Account](https://myaccount.genesisenergy.co.nz/)).
+4. Click **Submit**.
 
-To configure the Energy Dashboard:
-1.  Go to **Settings > Dashboards > Energy**.
-2.  Under **Electricity grid**, click **ADD CONSUMPTION**.
-3.  Select the following statistic:
-    *   `Genesis Electricity Consumption Daily`
-4.  Under **Gas consumption**, click **ADD GAS SOURCE**.
-5.  Select the following statistic:
-    *   `Genesis Gas Consumption Daily`
+### Integration Options (Auto-Correction)
+To enable automatic statistics correction:
+1. Go to **Settings > Devices & Services > Genesis Energy**.
+2. Click **CONFIGURE**.
+3. Toggle **Enable Auto-Correction**. When enabled, the integration will perform a daily statistic overwrite after 1:00 PM to correct any delayed hourly usage data from Genesis.
 
-The underlying statistic IDs created by this integration are:
-*   `sensor.genesis_energy_electricity_consumption_daily`
-*   `sensor.genesis_energy_electricity_cost_daily`
-*   `sensor.genesis_energy_gas_consumption_daily`
-*   `sensor.genesis_energy_gas_cost_daily`
+---
 
-## Services
+## 📈 Energy Dashboard Setup
 
-This integration provides four powerful services to manage your account.
+To add Genesis Energy data to your Home Assistant Energy Dashboard:
 
-### Service: `genesisenergy.backfill_statistics`
+1. Go to **Settings > Dashboards > Energy**.
+2. Under **Electricity Grid**, click **Add Consumption** and select:
+   * `Genesis Electricity Consumption Daily` (`sensor.genesis_energy_electricity_consumption_daily`)
+3. Under **Gas Consumption**, click **Add Gas Source** and select:
+   * `Genesis Gas Consumption Daily` (`sensor.genesis_energy_gas_consumption_daily`)
 
-This service imports historical usage data. It is most effective when run on a new installation to populate a deep history.
+---
 
-**Note:** This service will **not** fix or overwrite existing data. It will only add data for periods where none exists. If you have corrupted data from a previous version, you must fix it manually in **Developer Tools > Statistics**.
+## 🛠️ Actions & Services
 
-| Field             | Description                                                                 | Example          |
-| ----------------- | --------------------------------------------------------------------------- | ---------------- |
-| `days_to_fetch`   | **Required.** The total number of past days of data to retrieve.            | `365`            |
-| `fuel_type`       | **Required.** Which fuel type to backfill.                                  | `electricity`    |
-|                   | Options: `electricity`, `gas`, `both`                                       |                  |
+This integration provides four actions/services to manage your account and statistics.
 
-**How It Works (Important!)**
+### 1. `genesisenergy.backfill_statistics`
+Imports historical usage data from Genesis into Home Assistant's long-term statistics database.
 
-This service is designed to be **safe** and **non-destructive**. It will only add data for periods where **no data currently exists** in your Home Assistant database.
+| Field | Type | Description | Example |
+| :--- | :--- | :--- | :--- |
+| `days_to_fetch` | `integer` | **Required.** Number of past days to retrieve (1–730). | `90` |
+| `fuel_type` | `select` | **Required.** `electricity`, `gas`, or `both`. | `both` |
+| `force_overwrite` | `boolean` | **Required.** `true` to re-fetch and overwrite existing statistics; `false` to only fill missing dates. | `false` |
 
-*   **On a Clean Install:** When you first add the integration, your database is empty. You can run this service with a large number of days (e.g., `365`) to import a full year of history. This will work perfectly.
+---
 
-*   **After Data is Imported:** Once statistics exist, the service's behavior changes. It will fetch the historical data you request, but it will **only import points that are newer than the newest point already in your database.** This is a safety feature to prevent the "negative number" bug and avoid corrupting your existing history.
+### 2. `genesisenergy.add_powershout_booking`
+Books a Power Shout session directly from Home Assistant. Automatically detects and uses your currently selected property (`isSelectedSite`).
 
-**What This Means for You:**
+| Field | Type | Description | Example |
+| :--- | :--- | :--- | :--- |
+| `start_datetime` | `datetime` | **Required.** Local start date and time for the booking. | `"2026-08-15 18:00:00"` |
+| `duration_hours` | `integer` | **Required.** Duration in hours (1–4). | `1` |
 
-*   **The backfill service is most effective when run once, right after a clean installation.** Decide how much history you want (e.g., 90, 180, 365 days) and run it then.
-*   The service **cannot** be used to "fix" or "re-import" data for a period that has already been recorded. Its primary purpose is to fill in the past from where your data currently ends.
-*   If you have a gap or corrupted data from a previous version, you must fix it manually using **Developer Tools > Statistics**. The current version of this integration will prevent new corruption from occurring.
+---
 
-### Service: `genesisenergy.accept_powershout_offer`
+### 3. `genesisenergy.accept_powershout_offer`
+Accepts an available Power Shout offer using the offer GUID.
 
-This service lets you Accept a pending Power Shout offer.
+| Field | Type | Description | Example |
+| :--- | :--- | :--- | :--- |
+| `offer_id` | `string` | **Required.** The unique GUID/ID of the offer. | `"12345678-abcd-1234-abcd-1234567890ab"` |
 
-**Example:** Automating Power Shout Acceptance
-You can create a simple and powerful automation that adds a button to your dashboard only when there are Power Shout offers available to be accepted.
+> [!IMPORTANT]
+> **Usage Note:** This service cannot be easily called directly from Developer Tools because it requires the exact `offer_id` GUID from Genesis. It is designed to be called via a script (like `script.accept_all_power_shout_offers` below) which automatically extracts the `offer_id` from your Power Shout balance attributes.
 
-**1.** Create the accept_all_power_shout_offers Script
+---
 
-This script iterates through all available offers and accepts each one.
-Go to Settings > Automations & Scenes > Scripts.
-Click Add Script and choose Create new script.
-Switch to YAML mode (click the three dots in the top right) and paste the following code:
+### 4. `genesisenergy.force_update`
+Triggers an immediate poll of the Genesis Energy API for all sensors.
 
-```
-alias: Accept All Power Shout Offers
-sequence:
-  - condition: template
-    value_template: >-
-      {{ state_attr('sensor.genesis_energy_power_shout_balance',
-      'active_offers_count') > 0 }}
-  - repeat:
-      for_each: >-
-        {{ state_attr('sensor.genesis_energy_power_shout_balance',
-        'active_offers') }}
-      sequence:
-        - service: genesisenergy.accept_powershout_offer
-          data:
-            offer_id: "{{ repeat.item.loyaltyOffer.guid }}"
-        - delay:
-            seconds: 2
-icon: mdi:auto-fix
-description: "Accepts all available Power Shout offers from Genesis Energy."
-```
-**2.** Add a Conditional Button to your Dashboard
+| Field | Type | Description | Example |
+| :--- | :--- | :--- | :--- |
+| `fuel_type` | `select` | **Required.** `electricity`, `gas`, or `both`. | `both` |
 
-Add this conditional card to your dashboard. It will only display the "Accept" button when the binary sensor is 'on'.
+---
 
-```
-type: conditional
-conditions:
-  - entity: binary_sensor.genesis_energy_power_shout_offers_available
-    state: "on"
-card:
-  type: button
-  name: Accept Power Shout Offer(s)
-  icon: mdi:auto-fix
-  tap_action:
-    action: call-service
-    service: script.accept_all_power_shout_offers
-grid_options:
-  columns: 6
-  rows: 2
-```
+## 🤖 Helper Automation Scripts
 
-### Service: `genesisenergy.add_powershout_booking`
+To make the most of the integration on your dashboard, add these two helper scripts under **Settings > Automations & Scenes > Scripts**:
 
-This service lets you book Power Shouts from automations.
+### Script 1: Accept All Power Shout Offers
 
-| Field             | Description                                                                 | Example                    |
-| ----------------- | --------------------------------------------------------------------------- | -------------------------- |
-| `start_datetime`  | **Required.** The date and time for the Power Shout to begin (in your local timezone). | `"2025-07-20 19:00:00"`    |
-| `duration_hours`  | **Required.** The duration in hours (e.g., 1, 2, 3).                        | `2`                        |
+This script automatically loops through and accepts all pending Power Shout offers when triggered.
 
-### Service: `genesisenergy.force_update`
+    alias: Accept All Power Shout Offers
+    sequence:
+      - condition: template
+        value_template: >-
+          {{ state_attr('sensor.genesis_energy_power_shout_balance', 'active_offers_count') > 0 }}
+      - repeat:
+          for_each: >-
+            {{ state_attr('sensor.genesis_energy_power_shout_balance', 'active_offers') }}
+          sequence:
+            - data:
+                offer_id: "{{ repeat.item.loyaltyOffer.guid }}"
+              action: genesisenergy.accept_powershout_offer
+            - delay:
+                seconds: 2
+    icon: mdi:auto-fix
+    description: "Accepts all available Power Shout offers from Genesis Energy."
 
-This service triggers an immediate data refresh for all sensors. It has no parameters.
+### Script 2: Book a Power Shout (Interactive Form)
 
-## Important Note for New Installations
+This script provides UI selectors (`datetime` picker and a 1-4 hour dropdown) when tapped on your dashboard:
 
-When you first install the Genesis Energy integration, it will fetch the last 4 days of your usage data. However, to ensure Home Assistant's database is fully ready, the integration **will not automatically import this data** into the long-term statistics.
+    alias: Book a Power Shout
+    sequence:
+      - data:
+          start_datetime: "{{ start_time }}"
+          duration_hours: "{{ duration }}"
+        action: genesisenergy.add_powershout_booking
+    fields:
+      start_time:
+        name: Start Time
+        description: Select the date and the start hour for your Power Shout.
+        required: true
+        selector:
+          datetime: {}
+      duration:
+        name: Duration
+        description: Select the duration of the Power Shout.
+        required: true
+        selector:
+          select:
+            options:
+              - label: 1 Hour
+                value: "1"
+              - label: 2 Hours
+                value: "2"
+              - label: 3 Hours
+                value: "3"
+              - label: 4 Hours
+                value: "4"
+    mode: single
+    icon: mdi:flash-alert
+    description: "Allows interactive selection of start time and duration to book a Power Shout."
 
-**You must manually trigger the first import.**
+---
 
-This gives you a critical opportunity: if you want to import a large amount of historical data, you should do it now, before any recent data is added.
+## 🎨 Dashboard Cards & Templates
 
-**Recommended Steps for New Users:**
+Below are pre-built Lovelace cards designed for your dashboard.
 
-1.  After installing and configuring the integration, wait a minute for it to settle.
-2.  **If you want a deep history:** Call the `genesisenergy.backfill_statistics` service. Choose `both` for the fuel type and set `days_to_fetch` to your desired amount (e.g., `365` for one year). This will be the first data to enter your database, creating a complete history.
-3.  **If you only want recent data:** Call the `genesisenergy.force_update` service. This will trigger the import of the last 4 days of data and create your initial statistics.
+### 1. Genesis Summary & Billing Markdown Card
 
-Once you have performed either of these actions once, the integration will continue to update automatically every hour.
+Add a **Markdown** card and paste this Jinja2 template to display your live bill summary, usage breakdown, eco tracker, and active tariffs:
 
-## Debugging
+    type: markdown
+    content: >-
+      {% set sidekick_raw = state_attr('sensor.genesis_energy_account_details', 'widget_sidekick') %}
+      {% set plans_raw = state_attr('sensor.genesis_energy_account_details', 'billing_plans') %}
+      {% set eco_raw = state_attr('sensor.genesis_energy_account_details', 'eco_tracker') %}
+      {% set ps_dash_raw = state_attr('sensor.genesis_energy_account_details', 'dashboard_powershout') %}
+      {% set ps_active = is_state('binary_sensor.power_shout_active', 'on') %}
 
-To enable debug logging, add the following to your `configuration.yaml`:
+      {% if sidekick_raw is not none and plans_raw is not none %}
+      {% set sidekick = sidekick_raw | from_json %}
+      {% set plans = plans_raw | from_json %}
 
-```yaml
-logger:
-  default: info
-  logs:
-    custom_components.genesisenergy: debug
+      {% if ps_active %}
+      # <font color='#9c27b0'>FREE POWER ACTIVE</font>
+      *Your current usage is covered by a Power Shout booking.*
+      {% else %}
+      ### {{ sidekick.titleArea.title }}
+      {% endif %}
+
+      # <font color='{{ "#9c27b0" if ps_active else "#00adef" }}'>${{ sidekick.titleArea.value }}</font>
+
+      **Billing Period:** {{ sidekick.barArea.leftText }}
+
+      **Status:** {{ sidekick.barArea.rightText }}
+
+      ---
+      ### {{ sidekick.billArea.title }}
+      *Forecasted total for this period based on your usage patterns.*
+
+      ---
+      ### Usage Breakdown
+      | Service | Cost |
+      | :--- | :--- |
+      {% for supply in sidekick.supplyTypesArea.supplyTypes -%}
+      | {{ supply.text }} | ${{ supply.value }} |
+      {% endfor %}
+
+      {% if eco_raw is not none %}
+      {% set eco = eco_raw | from_json %}
+      ---
+      ### Eco Tracker
+      <font color='#4caf50'>**{{ eco.percentage }}%**</font> of NZ's power is currently being generated from **{{ eco.source }}**.
+      {% endif %}
+
+      {% if ps_dash_raw is not none %}
+      {% set ps_dash = ps_dash_raw | from_json %}
+      ---
+      ### Power Shout Balance
+      {{ ps_dash.message.description | replace('{{0}}', ps_dash.message.descriptionSubstrings[0].text) }}
+      {% endif %}
+
+      ---
+      ### Active Tariffs
+      {% for site in plans.billingAccountSites -%}
+      {% for supply in site.supplyPoints -%}
+      **{{ supply.supplyTypeDisplay }} ({{ supply.plan }})**
+      {% for tariff in supply.tariffs -%}
+      * {{ tariff.name }}: {{ tariff.value }} {{ tariff.unit }}
+      {% endfor %}
+      {% endfor %}
+      {% endfor %}
+      {% else %}
+      ### Genesis Data Unavailable
+      The integration is currently fetching fresh data from the Genesis API. Please wait a moment for the initial sync to complete.
+      {% endif %}
+
+---
+
+### 2. Accept Power Shout Button (Blinking Alert)
+
+A conditional button card using `custom:button-card` that flashes blue when a Power Shout offer is available:
+
+    type: conditional
+    conditions:
+      - condition: state
+        entity: binary_sensor.genesis_energy_power_shout_offers_available
+        state: "on"
+    card:
+      type: custom:button-card
+      entity: binary_sensor.genesis_energy_power_shout_offers_available
+      name: Accept Power Shout Offer(s)
+      icon: mdi:auto-fix
+      show_icon: true
+      styles:
+        card:
+          - background-color: "#1c6e9e"
+          - animation: blink 2s ease infinite
+        name:
+          - color: white
+        icon:
+          - color: "#fdd835"
+      tap_action:
+        action: call-service
+        service: script.accept_all_power_shout_offers
+    grid_options:
+      columns: 6
+      rows: 2
+
+---
+
+### 3. Book Power Shout Interactive Card
+
+Tapping this button triggers `script.book_a_power_shout`, prompting you with a pop-up dialog to pick the start date/time and duration:
+
+    type: custom:button-card
+    entity: binary_sensor.power_shout_active
+    name: |
+      [[[ 
+        const balance = states['sensor.genesis_energy_power_shout_balance'].state;
+        return `Book Power Shout`; 
+      ]]]
+    icon: mdi:flash-alert
+    show_icon: true
+    state:
+      - value: "on"
+        styles:
+          card:
+            - background-color: "#9c27b0"
+            - animation: blink 2s ease infinite
+          name:
+            - color: white
+          icon:
+            - color: "#fdd835"
+      - value: "off"
+        styles:
+          card:
+            - background-color: var(--card-background-color)
+          icon:
+            - color: var(--paper-item-icon-color)
+    tap_action:
+      action: more-info
+      entity: script.book_a_power_shout
+
+---
+
+### 4. Expiring Power Shouts Warning Card
+
+Displays a mushroom template card when Power Shout hours are approaching expiration:
+
+    type: custom:mushroom-template-card
+    primary: Expiring Power Shouts
+    icon: mdi:timer-sand
+    icon_color: yellow
+    features_position: bottom
+    entity: sensor.genesis_energy_power_shout_balance
+    secondary: >-
+      {{ state_attr('sensor.genesis_energy_power_shout_balance', 'expiring_hours_message') }}
+    visibility:
+      - condition: state
+        entity: binary_sensor.power_shout_hours_expiring
+        state: "on"
+
+---
+
+### 5. Quick Account Details Grid Stack
+
+A vertical stack grid displaying current rates, Power Shout balance, and billing cycle status:
+
+    type: vertical-stack
+    cards:
+      - type: grid
+        columns: 2
+        square: false
+        cards:
+          - type: entity
+            entity: sensor.genesis_energy_electricity_ev_low_day
+            name: Current Rate
+            icon: mdi:currency-usd
+          - type: entity
+            entity: sensor.genesis_energy_power_shout_balance
+            name: Power Shout
+            icon: mdi:lightning-bolt
+      - type: entities
+        entities:
+          - entity: sensor.genesis_billing_cycle
+            name: Current Bill Period
+            secondary_info: last-changed
+
+---
+
+## 🐛 Debugging
+
+To enable verbose debug logging for this integration, add the following to your `configuration.yaml`:
+
+    logger:
+      default: info
+      logs:
+        custom_components.genesisenergy: debug
+
+---
+
+## 📄 Disclaimer
+
+This custom integration is developed for the Home Assistant community with Artificial Intelligence (AI) assistance. It interacts with private web APIs used by Genesis Energy NZ. Use of this integration is at your own risk. The maintainers are not responsible for any issues with your Genesis Energy account, billing, or bookings.
