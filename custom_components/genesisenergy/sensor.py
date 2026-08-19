@@ -15,7 +15,11 @@ from homeassistant.helpers.update_coordinator import CoordinatorEntity
 from homeassistant.util import dt as dt_util
 
 from homeassistant.components.recorder import get_instance
-from homeassistant.components.recorder.models import StatisticData, StatisticMetaData
+from homeassistant.components.recorder.models import (
+    StatisticData,
+    StatisticMetaData,
+    StatisticMeanType,
+)
 from homeassistant.components.recorder.statistics import async_add_external_statistics, get_last_statistics, statistics_during_period
 
 from .const import (
@@ -87,7 +91,6 @@ async def async_setup_entry(hass: HomeAssistant, config_entry: ConfigEntry, asyn
         entities.append(elec_sensor)
         coordinator.statistics_sensors.append(elec_sensor)
         
-        # Grid Generation Sensor (supports both realTime and nextTwoDays)
         if coordinator.data.get(DATA_API_GENERATION_MIX_REALTIME) or coordinator.data.get(DATA_API_GENERATION_MIX):
             entities.append(GenerationMixSensor(coordinator))
             
@@ -123,7 +126,6 @@ async def async_setup_entry(hass: HomeAssistant, config_entry: ConfigEntry, asyn
         GenesisEnergyAccountSensor(coordinator)
     ])
     
-    # Billing summary sensors
     if coordinator.data.get(DATA_API_WIDGET_SIDEKICK) or coordinator.data.get(DATA_API_WIDGET_BILLS_V2):
         LOGGER.info("Billing summary data found. Adding billing sensors. ✅")
         entities.extend([TotalUsedSensor(coordinator), EstimatedTotalSensor(coordinator), EstimatedFutureUseSensor(coordinator)])
@@ -151,7 +153,6 @@ class GenesisPriceSensor(CoordinatorEntity[GenesisEnergyDataUpdateCoordinator], 
 
     @property
     def native_value(self) -> float | None:
-        # 1. Check direct EV rates endpoint first
         ev_rates = self.coordinator.data.get(DATA_API_EV_RATES)
         if ev_rates and isinstance(ev_rates, dict):
             if "Day" in self._tariff_name and "dayRate" in ev_rates:
@@ -159,7 +160,6 @@ class GenesisPriceSensor(CoordinatorEntity[GenesisEnergyDataUpdateCoordinator], 
             if "Night" in self._tariff_name and "nightRate" in ev_rates:
                 return float(ev_rates["nightRate"].get("value", 0))
 
-        # 2. Fallback to billing plans
         plans = self.coordinator.data.get(DATA_API_BILLING_PLANS, {})
         for site in plans.get("billingAccountSites", []):
             for supply in site.get("supplyPoints", []):
@@ -240,7 +240,16 @@ class GenesisEnergyStatisticsSensor(CoordinatorEntity[GenesisEnergyDataUpdateCoo
             if stats_to_add:
                 mode_str = "Overwrite" if force_overwrite else "Append"
                 LOGGER.info(f"  Importing {len(stats_to_add)} '{stat_name}' statistics (Mode: {mode_str}).")
-                meta = StatisticMetaData(has_mean=False, has_sum=True, name=stat_name, source=DOMAIN, statistic_id=statistic_id, unit_of_measurement=unit)
+                meta = StatisticMetaData(
+                    has_mean=False,
+                    mean_type=StatisticMeanType.NONE,
+                    has_sum=True,
+                    name=stat_name,
+                    source=DOMAIN,
+                    statistic_id=statistic_id,
+                    unit_of_measurement=unit,
+                    unit_class=None,
+                )
                 async_add_external_statistics(self.hass, meta, stats_to_add)
             else: LOGGER.info(f"  No new data to import for '{stat_name}'.")
         await _process_one_statistic(self._consumption_statistic_id, self._consumption_statistic_name, self._unit, 'kw')
@@ -254,14 +263,12 @@ class GenerationMixSensor(CoordinatorEntity[GenesisEnergyDataUpdateCoordinator],
 
     @property
     def native_value(self):
-        # 1. Try real-time generation mix (new website)
         rt_mix = self.coordinator.data.get(DATA_API_GENERATION_MIX_REALTIME)
         if rt_mix and isinstance(rt_mix, dict):
             eco_pct = rt_mix.get("generationSourcesEcoFriendlyPercentage")
             if eco_pct is not None:
                 return float(eco_pct)
 
-        # 2. Fallback to hourly generation mix forecast
         if not (gen_mix := self.coordinator.data.get(DATA_API_GENERATION_MIX)): return None
         now_nz = dt_util.now(self._nz_tz); today, hour = now_nz.strftime('%Y-%m-%d'), now_nz.hour
         for day in gen_mix:
