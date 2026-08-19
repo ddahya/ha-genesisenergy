@@ -225,7 +225,6 @@ class GenesisEnergyApi:
             if not await self._perform_full_login(): raise CannotConnect("Full login failed.")
             if not (self._token and self._access_token_absolute_expiry_ts > (datetime.now(timezone.utc).timestamp() + self.TOKEN_VALIDITY_BUFFER_MINUTES * 60)): raise InvalidAuth("Token invalid after login.")
 
-
     async def _make_api_call(self, method: str, endpoint: str, params: dict | None = None, json_payload: dict | None = None, description: str = "data", expect_json: bool = True) -> Any:
         await self._ensure_valid_token()
         session = await self._get_session()
@@ -276,9 +275,11 @@ class GenesisEnergyApi:
     async def get_energy_data_for_period(self, start_date_str: str, end_date_str: str):
         payload = {'startDate': start_date_str, 'endDate': end_date_str, 'intervalType': "HOURLY"}
         return await self._make_api_call("POST", "/v2/private/electricity/site-usage", json_payload=payload, description=f"electricity usage for {start_date_str}-{end_date_str}")
+
     async def get_gas_data_for_period(self, start_date_str: str, end_date_str: str):
         params = {'startDate': start_date_str, 'endDate': end_date_str, 'intervalType': "HOURLY"}
         return await self._make_api_call("GET", "/v2/private/naturalgas/advanced/usage", params=params, description=f"gas usage for {start_date_str}-{end_date_str}")
+
     async def get_powershout_info(self): return await self._make_api_call("GET", "/v2/private/powershoutcurrency/eligible/accounts", description="Power Shout eligible accounts info")
     async def get_powershout_balance(self): return await self._make_api_call("GET", "/v2/private/powershoutcurrency/balance", description="Power Shout balance")
     async def get_powershout_bookings(self): return await self._make_api_call("GET", "/v2/private/powershoutcurrency/bookings", description="Power Shout bookings")
@@ -286,119 +287,54 @@ class GenesisEnergyApi:
     async def get_powershout_expiring_hours(self): return await self._make_api_call("GET", "/v2/private/powershoutcurrency/expiringHours", description="Power Shout expiring")
 
     async def get_powershout_vouchers_for_date(self, selected_date_str: str, supply_point_id: str):
-        """Gets available Power Shout vouchers for a specific date."""
-        params = {
-            "selectedDate": selected_date_str,
-            "supplyPointId": supply_point_id,
-        }
-        return await self._make_api_call(
-            "GET",
-            "/v2/private/powershoutcurrency/bookings",
-            params=params,
-            description="Power Shout vouchers for date",
-        )
+        params = {"selectedDate": selected_date_str, "supplyPointId": supply_point_id}
+        return await self._make_api_call("GET", "/v2/private/powershoutcurrency/bookings", params=params, description="Power Shout vouchers for date")
 
-    async def add_powershout_booking(
-        self,
-        start_date_str: str,
-        duration: int,
-        supply_agreement_id: str,
-        supply_point_id: str,
-        loyalty_account_id: str,
-        eco_hours: list,
-        vouchers: list,
-    ):
-        """Adds a Power Shout booking."""
-        payload = {
-            "startDate": start_date_str,
-            "supplyAgreementId": supply_agreement_id,
-            "duration": duration,
-            "supplyPointId": supply_point_id,
-            "loyaltyAccountId": loyalty_account_id,
-            "ecoHours": eco_hours,
-            "vouchers": vouchers,
-        }
-        return await self._make_api_call(
-            "POST",
-            "/v2/private/powershoutcurrency/booking/add",
-            json_payload=payload,
-            description="add Power Shout booking",
-            expect_json=False,
-        )
+    async def add_powershout_booking(self, start_date_str: str, duration: int, supply_agreement_id: str, supply_point_id: str, loyalty_account_id: str, eco_hours: list, vouchers: list):
+        payload = {"startDate": start_date_str, "supplyAgreementId": supply_agreement_id, "duration": duration, "supplyPointId": supply_point_id, "loyaltyAccountId": loyalty_account_id, "ecoHours": eco_hours, "vouchers": vouchers}
+        return await self._make_api_call("POST", "/v2/private/powershoutcurrency/booking/add", json_payload=payload, description="add Power Shout booking", expect_json=False)
     
-    async def accept_powershout_offer(
-        self,
-        loyalty_account_id: str,
-        member_id: str,
-        campaign_offer_id: str,
-        quantity: int,
-        offer_code: str
-    ) -> bool:
-        """Accepts a Power Shout offer."""
-        payload = {
-            "loyaltyAccountId": loyalty_account_id,
-            "memberId": member_id,
-            "campaignOfferId": campaign_offer_id,
-            "quantity": quantity,
-            "offerCode": offer_code,
-        }
-        response = await self._make_api_call(
-            "POST",
-            "/v2/private/powershoutcurrency/offer/accept",
-            json_payload=payload,
-            description="accept Power Shout offer",
-            expect_json=False
-        )
+    async def accept_powershout_offer(self, loyalty_account_id: str, member_id: str, campaign_offer_id: str, quantity: int, offer_code: str) -> bool:
+        payload = {"loyaltyAccountId": loyalty_account_id, "memberId": member_id, "campaignOfferId": campaign_offer_id, "quantity": quantity, "offerCode": offer_code}
+        response = await self._make_api_call("POST", "/v2/private/powershoutcurrency/offer/accept", json_payload=payload, description="accept Power Shout offer", expect_json=False)
         return response.get("status") == 200
         
     async def get_billing_plans(self):
         return await self._make_api_call("GET", "/v2/private/billing/plans", description="billing plans")
-    async def get_widget_property_list(self):
-        return await self._make_api_call("GET", "/v2/private/drd/widget/propertyList", description="widget property list")
-    async def get_widget_property_switcher(self):
-        return await self._make_api_call("GET", "/v2/private/drd/widget/propertySwitcher", description="widget property switcher")
-    async def get_widget_hero_info(self):
-        return await self._make_api_call("GET", "/v2/private/drd/widget/hero/info", description="widget hero info")
-    async def get_widget_sidekick(self):
-        return await self._make_api_call("GET", "/v2/private/drd/widget/sidekick", description="widget sidekick")
-    async def get_widget_bill_summary(self):
-        return await self._make_api_call("GET", "/v2/private/drd/widget/billSummary", description="widget bill summary")
-    async def get_widget_dashboard_powershout(self): 
-        return await self._make_api_call("GET", "/v2/private/drd/widget/powerShout", description="widget dashboard Power Shout")
-    async def get_widget_eco_tracker(self):
-        return await self._make_api_call("GET", "/v2/private/drd/widget/ecoTracker", description="widget eco tracker")
-    async def get_widget_dashboard_list(self, tab_id: str = "newDashboard"):
-        params = {"tabId": tab_id}
-        return await self._make_api_call("GET", "/v2/private/drd/widgets/list", params=params, description="widget dashboard list")
-    async def get_widget_action_tile_list(self):
-        return await self._make_api_call("GET", "/v2/private/drd/actionTile/list", description="widget action tile list")
-    async def get_electricity_aggregated_bill_period(self, start_date: str, end_date: str):
-        payload = {'startDate': start_date, 'endDate': end_date}
-        return await self._make_api_call("POST", "/v2/private/electricity/aggregated-site-bill-period", json_payload=payload, description="electricity aggregated bill period")
-    async def get_naturalgas_aggregated_bill_period(self, start_date: str, end_date: str):
-        params = {'startDate': start_date, 'endDate': end_date}
-        return await self._make_api_call("GET", "/v2/private/naturalgas/advanced/usage", params=params, description="naturalgas aggregated bill period")
-    async def get_next_best_action(self):
-        return await self._make_api_call("GET", "/v2/private/nextBestAction", description="next best action")
-    
-    async def get_generation_mix(self):
-        """Gets the generation mix forecast for the next two days."""
-        return await self._make_api_call("GET", "/v2/private/generationMix/nextTwoDays", description="generation mix")
 
-    async def get_lpg_order_status(self):
-        """Gets the order status for all LPG supply points."""
-        return await self._make_api_call("GET", "/v2/private/lpg/orderStatus", description="LPG order status")
+    # --- New V2 Website Endpoints ---
+    async def get_widget_bill_summary_v2(self):
+        """Gets V2 consolidated bill summary and estimated usage."""
+        return await self._make_api_call("GET", "/v2/private/drd/widget/billSummaryV2", description="widget bill summary V2")
 
-    async def get_lpg_delivery_history(self, supply_agreement_id: str):
-        """Gets the delivery history for a specific LPG supply point."""
-        params = {
-            "supplyAgreementId": supply_agreement_id,
-            "skip": 0,
-            "pageSize": 40
-        }
-        return await self._make_api_call("GET", "/v2/private/lpg/deliveryHistory", params=params, description="LPG delivery history")
+    async def get_generation_mix_realtime(self):
+        """Gets real-time NZ grid generation mix."""
+        return await self._make_api_call("GET", "/v2/private/generationMix/realTime", description="generation mix real-time")
 
-    async def get_lpg_delivery_summary(self, supply_agreement_id: str):
-        """Gets the delivery summary for a specific LPG supply point."""
-        params = {"supplyAgreementId": supply_agreement_id}
-        return await self._make_api_call("GET", "/v2/private/lpg/deliverySummary", params=params, description="LPG delivery summary")
+    async def get_ev_rates(self):
+        """Gets direct EV day and night rates."""
+        return await self._make_api_call("GET", "/v2/private/ev/rates/dayNight", description="EV day night rates")
+
+    async def get_ev_insights(self):
+        """Gets EV plan schedule and vehicle model insights."""
+        return await self._make_api_call("GET", "/v2/private/evPlan/evInsights", description="EV plan insights")
+
+    async def get_consolidation_usage_summary(self, start_date: str, end_date: str):
+        """Gets billing period consolidated usage summary."""
+        payload = {"startDate": start_date, "endDate": end_date}
+        return await self._make_api_call("POST", "/v2/private/consolidation/usage-summary", json_payload=payload, description="consolidation usage summary")
+
+    async def get_widget_property_list(self): return await self._make_api_call("GET", "/v2/private/drd/widget/propertyList", description="widget property list")
+    async def get_widget_property_switcher(self): return await self._make_api_call("GET", "/v2/private/drd/widget/propertySwitcher", description="widget property switcher")
+    async def get_widget_hero_info(self): return await self._make_api_call("GET", "/v2/private/drd/widget/hero/info", description="widget hero info")
+    async def get_widget_sidekick(self): return await self._make_api_call("GET", "/v2/private/drd/widget/sidekick", description="widget sidekick")
+    async def get_widget_bill_summary(self): return await self._make_api_call("GET", "/v2/private/drd/widget/billSummary", description="widget bill summary")
+    async def get_widget_dashboard_powershout(self): return await self._make_api_call("GET", "/v2/private/drd/widget/powerShout", description="widget dashboard Power Shout")
+    async def get_widget_eco_tracker(self): return await self._make_api_call("GET", "/v2/private/drd/widget/ecoTracker", description="widget eco tracker")
+    async def get_widget_dashboard_list(self, tab_id: str = "newDashboard"): return await self._make_api_call("GET", "/v2/private/drd/widgets/list", params={"tabId": tab_id}, description="widget dashboard list")
+    async def get_widget_action_tile_list(self): return await self._make_api_call("GET", "/v2/private/drd/actionTile/list", description="widget action tile list")
+    async def get_next_best_action(self): return await self._make_api_call("GET", "/v2/private/nextBestAction", description="next best action")
+    async def get_generation_mix(self): return await self._make_api_call("GET", "/v2/private/generationMix/nextTwoDays", description="generation mix")
+    async def get_lpg_order_status(self): return await self._make_api_call("GET", "/v2/private/lpg/orderStatus", description="LPG order status")
+    async def get_lpg_delivery_history(self, sa_id: str): return await self._make_api_call("GET", "/v2/private/lpg/deliveryHistory", params={"supplyAgreementId": sa_id, "skip": 0, "pageSize": 40}, description="LPG delivery history")
+    async def get_lpg_delivery_summary(self, sa_id: str): return await self._make_api_call("GET", "/v2/private/lpg/deliverySummary", params={"supplyAgreementId": sa_id}, description="LPG delivery summary")
