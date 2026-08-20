@@ -156,17 +156,20 @@ class GenesisPriceSensor(CoordinatorEntity[GenesisEnergyDataUpdateCoordinator], 
         ev_rates = self.coordinator.data.get(DATA_API_EV_RATES)
         if ev_rates and isinstance(ev_rates, dict):
             if "Day" in self._tariff_name and "dayRate" in ev_rates:
-                return float(ev_rates["dayRate"].get("value", 0))
+                day_val = ev_rates["dayRate"].get("value")
+                if day_val is not None: return float(day_val)
             if "Night" in self._tariff_name and "nightRate" in ev_rates:
-                return float(ev_rates["nightRate"].get("value", 0))
+                night_val = ev_rates["nightRate"].get("value")
+                if night_val is not None: return float(night_val)
 
-        plans = self.coordinator.data.get(DATA_API_BILLING_PLANS, {})
-        for site in plans.get("billingAccountSites", []):
-            for supply in site.get("supplyPoints", []):
-                if supply.get("supplyType") == self._supply_type:
-                    for tariff in supply.get("tariffs", []):
-                        if tariff.get("name") == self._tariff_name:
-                            return abs(float(tariff.get("value", 0)))
+        plans = self.coordinator.data.get(DATA_API_BILLING_PLANS) or {}
+        if isinstance(plans, dict):
+            for site in plans.get("billingAccountSites", []):
+                for supply in site.get("supplyPoints", []):
+                    if supply.get("supplyType") == self._supply_type:
+                        for tariff in supply.get("tariffs", []):
+                            if tariff.get("name") == self._tariff_name:
+                                return abs(float(tariff.get("value", 0)))
         return None
 
 class LPGDetailsSensor(CoordinatorEntity[GenesisEnergyDataUpdateCoordinator], SensorEntity):
@@ -353,7 +356,7 @@ class ForecastSensor(CoordinatorEntity[GenesisEnergyDataUpdateCoordinator], Sens
     @property
     def available(self):
         f = self.coordinator.data.get(DATA_API_ELECTRICITY_FORECAST)
-        if not f: return False
+        if not f or not isinstance(f, dict): return False
         if "IcpForecasts" in f and f["IcpForecasts"]: return True
         if "Forecast" in f or "forecast" in f: return True
         return False
@@ -361,9 +364,11 @@ class ForecastSensor(CoordinatorEntity[GenesisEnergyDataUpdateCoordinator], Sens
     @property
     def _today_forecast_data(self):
         f = self.coordinator.data.get(DATA_API_ELECTRICITY_FORECAST)
-        if not f: return None
-        if "IcpForecasts" in f and f["IcpForecasts"] and "Forecast" in f["IcpForecasts"][0]:
-            return f["IcpForecasts"][0]["Forecast"][0]
+        if not f or not isinstance(f, dict): return None
+        if "IcpForecasts" in f and f["IcpForecasts"] and isinstance(f["IcpForecasts"], list):
+            first_icp = f["IcpForecasts"][0]
+            if isinstance(first_icp, dict) and "Forecast" in first_icp and isinstance(first_icp["Forecast"], list) and first_icp["Forecast"]:
+                return first_icp["Forecast"][0]
         if "Forecast" in f and isinstance(f["Forecast"], list) and f["Forecast"]:
             return f["Forecast"][0]
         return None
@@ -374,7 +379,7 @@ class ForecastUsageSensor(ForecastSensor):
     @property
     def native_value(self):
         t = self._today_forecast_data
-        if not t: return None
+        if not t or not isinstance(t, dict): return None
         return t.get("PredictionInkWh") or t.get("predictionInkWh") or t.get("predictionKwh")
 
 class ForecastCostSensor(ForecastSensor):
@@ -383,7 +388,7 @@ class ForecastCostSensor(ForecastSensor):
     @property
     def native_value(self):
         t = self._today_forecast_data
-        if not t: return None
+        if not t or not isinstance(t, dict): return None
         return t.get("PredictionCost") or t.get("predictionCost")
 
 class UsageBreakdownSensor(CoordinatorEntity[GenesisEnergyDataUpdateCoordinator], SensorEntity):
@@ -395,17 +400,24 @@ class UsageBreakdownSensor(CoordinatorEntity[GenesisEnergyDataUpdateCoordinator]
     @property
     def _latest_breakdown_period(self):
         b = self.coordinator.data.get(DATA_API_USAGE_BREAKDOWN)
-        return b["electricity"]["breakdowns"][0] if b and "electricity" in b and b["electricity"].get("breakdowns") else None
+        if not b or not isinstance(b, dict): return None
+        elec = b.get("electricity")
+        if not elec or not isinstance(elec, dict): return None
+        breakdowns = elec.get("breakdowns")
+        if not breakdowns or not isinstance(breakdowns, list): return None
+        return breakdowns[0]
 
     @property
     def _category_data(self):
         if b := self._latest_breakdown_period:
             for c in b.get("categories", []):
-                if c.get("name") == self._category_name: return c
+                if isinstance(c, dict) and c.get("name") == self._category_name: return c
         return None
 
     @property
-    def native_value(self): return self._category_data.get("kWh", {}).get("value") if self._category_data else None
+    def native_value(self):
+        if not self._category_data: return None
+        return (self._category_data.get("kWh") or {}).get("value")
 
 class GenesisBillSensor(CoordinatorEntity[GenesisEnergyDataUpdateCoordinator], SensorEntity):
     _attr_has_entity_name, _attr_native_unit_of_measurement, _attr_device_class, _attr_icon = True, "NZD", SensorDeviceClass.MONETARY, "mdi:cash"
@@ -413,15 +425,18 @@ class GenesisBillSensor(CoordinatorEntity[GenesisEnergyDataUpdateCoordinator], S
         super().__init__(coordinator); self.entity_description, self._attr_device_info, self._attr_unique_id = desc, coordinator.device_info, f"{coordinator.config_entry.entry_id}_{desc.key}"
     @property
     def available(self):
-        return super().available and (
-            self.coordinator.data.get(DATA_API_WIDGET_SIDEKICK) is not None or 
-            self.coordinator.data.get(DATA_API_WIDGET_BILLS_V2) is not None
-        )
+        if not super().available or not self.coordinator.data:
+            return False
+        return bool(self._get_sidekick_data())
 
-    def _get_sidekick_data(self):
-        if s := self.coordinator.data.get(DATA_API_WIDGET_SIDEKICK): return s
-        if v2 := self.coordinator.data.get(DATA_API_WIDGET_BILLS_V2):
-            return v2.get("billEstimated", {})
+    def _get_sidekick_data(self) -> dict:
+        if not self.coordinator.data or not isinstance(self.coordinator.data, dict):
+            return {}
+        if (s := self.coordinator.data.get(DATA_API_WIDGET_SIDEKICK)) and isinstance(s, dict):
+            return s
+        if (v2 := self.coordinator.data.get(DATA_API_WIDGET_BILLS_V2)) and isinstance(v2, dict):
+            if (est := v2.get("billEstimated")) and isinstance(est, dict):
+                return est
         return {}
 
 class ElectricityUsedSensor(GenesisBillSensor):
@@ -429,8 +444,9 @@ class ElectricityUsedSensor(GenesisBillSensor):
     @property
     def native_value(self):
         s_data = self._get_sidekick_data()
-        for s in s_data.get('supplyTypesArea', {}).get('supplyTypes', []):
-            if s.get('type') in ['electricity', 'Electricity']:
+        supply_types = (s_data.get('supplyTypesArea') or {}).get('supplyTypes') or []
+        for s in supply_types:
+            if isinstance(s, dict) and s.get('type') in ['electricity', 'Electricity']:
                 try: return float(s.get('value'))
                 except (ValueError, TypeError): return None
         return 0.0
@@ -440,8 +456,9 @@ class GasUsedSensor(GenesisBillSensor):
     @property
     def native_value(self):
         s_data = self._get_sidekick_data()
-        for s in s_data.get('supplyTypesArea', {}).get('supplyTypes', []):
-            if s.get('type') in ['naturalGas', 'natural_gas', 'Gas', 'gas']:
+        supply_types = (s_data.get('supplyTypesArea') or {}).get('supplyTypes') or []
+        for s in supply_types:
+            if isinstance(s, dict) and s.get('type') in ['naturalGas', 'natural_gas', 'Gas', 'gas']:
                 try: return float(s.get('value'))
                 except (ValueError, TypeError): return None
         return 0.0
@@ -450,16 +467,23 @@ class TotalUsedSensor(GenesisBillSensor):
     def __init__(self, coordinator): super().__init__(coordinator, SensorEntityDescription(key=SENSOR_KEY_BILL_TOTAL_USED, name="Genesis Bill - Total Used", state_class=SensorStateClass.TOTAL))
     @property
     def native_value(self):
-        try: return float(self._get_sidekick_data().get('titleArea', {}).get('value'))
-        except (ValueError, TypeError): return None
+        s_data = self._get_sidekick_data()
+        val = (s_data.get('titleArea') or {}).get('value')
+        if val is not None:
+            try: return float(val)
+            except (ValueError, TypeError): return None
+        return None
 
 class EstimatedTotalSensor(GenesisBillSensor):
     def __init__(self, coordinator): super().__init__(coordinator, SensorEntityDescription(key=SENSOR_KEY_BILL_ESTIMATED_TOTAL, name="Genesis Bill - Estimated Total"))
     @property
     def native_value(self):
-        t = self._get_sidekick_data().get('billArea', {}).get('title')
-        try: return float(t.split('$')[1]) if t and '$' in t else None
-        except (ValueError, IndexError): return None
+        s_data = self._get_sidekick_data()
+        t = (s_data.get('billArea') or {}).get('title')
+        if t and '$' in t:
+            try: return float(t.split('$')[1])
+            except (ValueError, IndexError): return None
+        return None
 
 class EstimatedFutureUseSensor(GenesisBillSensor):
     def __init__(self, coordinator): super().__init__(coordinator, SensorEntityDescription(key=SENSOR_KEY_BILL_ESTIMATED_FUTURE, name="Genesis Bill - Estimated Future Use"))
@@ -467,10 +491,14 @@ class EstimatedFutureUseSensor(GenesisBillSensor):
     def native_value(self):
         s = self._get_sidekick_data()
         ev, uv = 0.0, 0.0
-        try: ev = float(s.get('billArea', {}).get('title').split('$')[1])
-        except (ValueError, IndexError): pass
-        try: uv = float(s.get('titleArea', {}).get('value'))
-        except (ValueError, TypeError): pass
+        t = (s.get('billArea') or {}).get('title')
+        if t and '$' in t:
+            try: ev = float(t.split('$')[1])
+            except (ValueError, IndexError): pass
+        val = (s.get('titleArea') or {}).get('value')
+        if val is not None:
+            try: uv = float(val)
+            except (ValueError, TypeError): pass
         return round(max(0.0, ev - uv), 2)
 
 class PowerShoutEligibilitySensor(CoordinatorEntity[GenesisEnergyDataUpdateCoordinator], SensorEntity):
@@ -481,7 +509,9 @@ class PowerShoutEligibilitySensor(CoordinatorEntity[GenesisEnergyDataUpdateCoord
     @property
     def native_value(self):
         p = self.coordinator.data.get(DATA_API_POWERSHOUT_INFO)
-        return isinstance(p.get("eligibleBillingAccounts"), list) and len(p["eligibleBillingAccounts"]) > 0 if p else None
+        if not p or not isinstance(p, dict): return None
+        eligible = p.get("eligibleBillingAccounts")
+        return isinstance(eligible, list) and len(eligible) > 0
 
 class PowerShoutBalanceSensor(CoordinatorEntity[GenesisEnergyDataUpdateCoordinator], SensorEntity):
     _attr_has_entity_name = True
@@ -490,23 +520,31 @@ class PowerShoutBalanceSensor(CoordinatorEntity[GenesisEnergyDataUpdateCoordinat
         self._attr_unique_id = f"{coordinator.config_entry.entry_id}_{self.entity_description.key}"
     @property
     def native_value(self):
-        try: return float(self.coordinator.data.get(DATA_API_POWERSHOUT_BALANCE, {}).get("balance"))
+        bal = self.coordinator.data.get(DATA_API_POWERSHOUT_BALANCE)
+        if not bal or not isinstance(bal, dict): return None
+        try: return float(bal.get("balance"))
         except (ValueError, TypeError): return None
     @property
     def extra_state_attributes(self):
         attrs = {}
-        if not self.coordinator.data: return None
-        if o := self.coordinator.data.get(DATA_API_POWERSHOUT_OFFERS, {}): attrs["active_offers_count"], attrs["active_offers"] = len(o.get("activeOffers", [])), o.get("activeOffers", [])
+        if not self.coordinator.data or not isinstance(self.coordinator.data, dict): return None
+        if o := self.coordinator.data.get(DATA_API_POWERSHOUT_OFFERS):
+            if isinstance(o, dict):
+                attrs["active_offers_count"], attrs["active_offers"] = len(o.get("activeOffers", [])), o.get("activeOffers", [])
         if e := self.coordinator.data.get(DATA_API_POWERSHOUT_EXPIRING):
-            if m := e.get("expiringHoursMessage"): 
-                t_title = m.get("title"); substrings = m.get("titleSubstrings")
-                if t_title and substrings: attrs["expiring_hours_message"] = t_title.replace("{{0}}", substrings[0].get("text"))
-                elif t_title: attrs["expiring_hours_message"] = t_title
-            if t_tip := e.get("messageTooltip"): attrs["expiring_hours_tooltip"] = t_tip.get("description")
-        if b_data := self.coordinator.data.get(DATA_API_POWERSHOUT_BOOKINGS, {}):
-            b_list = b_data.get("bookings", []); attrs["bookings"] = b_list
-            u = sorted([x for x in b_list if datetime.fromisoformat(x["startDateTime"]).replace(tzinfo=timezone.utc) > dt_util.utcnow()], key=lambda x: x["startDateTime"])
-            if u: attrs["next_booking_start"] = u[0]["startDateTime"]
+            if isinstance(e, dict):
+                if m := e.get("expiringHoursMessage"): 
+                    t_title = m.get("title"); substrings = m.get("titleSubstrings")
+                    if t_title and isinstance(substrings, list) and substrings:
+                        attrs["expiring_hours_message"] = t_title.replace("{{0}}", substrings[0].get("text", ""))
+                    elif t_title: attrs["expiring_hours_message"] = t_title
+                if t_tip := e.get("messageTooltip"):
+                    if isinstance(t_tip, dict): attrs["expiring_hours_tooltip"] = t_tip.get("description")
+        if b_data := self.coordinator.data.get(DATA_API_POWERSHOUT_BOOKINGS):
+            if isinstance(b_data, dict):
+                b_list = b_data.get("bookings", []); attrs["bookings"] = b_list
+                u = sorted([x for x in b_list if isinstance(x, dict) and x.get("startDateTime") and datetime.fromisoformat(x["startDateTime"]).replace(tzinfo=timezone.utc) > dt_util.utcnow()], key=lambda x: x["startDateTime"])
+                if u: attrs["next_booking_start"] = u[0]["startDateTime"]
         return attrs
 
 class GenesisEnergyAccountSensor(CoordinatorEntity[GenesisEnergyDataUpdateCoordinator], SensorEntity):
@@ -518,7 +556,7 @@ class GenesisEnergyAccountSensor(CoordinatorEntity[GenesisEnergyDataUpdateCoordi
     def native_value(self) -> str: return dt_util.utcnow().isoformat() if self.coordinator.last_update_success else "error"
     @property
     def extra_state_attributes(self) -> Mapping[str, Any] | None:
-        if not self.coordinator.data: return None
+        if not self.coordinator.data or not isinstance(self.coordinator.data, dict): return None
         k = [DATA_API_BILLING_PLANS, DATA_API_WIDGET_HERO, DATA_API_WIDGET_BILLS, DATA_API_WIDGET_BILLS_V2, DATA_API_WIDGET_PROPERTY_LIST, DATA_API_WIDGET_PROPERTY_SWITCHER, DATA_API_WIDGET_SIDEKICK, DATA_API_WIDGET_DASHBOARD_POWERSHOUT, DATA_API_WIDGET_ECO_TRACKER, DATA_API_WIDGET_DASHBOARD_LIST, DATA_API_WIDGET_ACTION_TILE_LIST, DATA_API_NEXT_BEST_ACTION]
         attrs = {}
         for key in k:
