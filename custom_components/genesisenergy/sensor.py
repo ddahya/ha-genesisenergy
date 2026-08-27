@@ -39,6 +39,7 @@ from .const import (
     CONF_ENABLE_AUTO_CORRECTION, DAILY_OVERWRITE_HOUR
 )
 from .coordinator import GenesisEnergyDataUpdateCoordinator
+from .payloads import as_mapping, latest_usage_breakdown
 
 def safe_json_dumps(data):
     def default_serializer(o):
@@ -141,13 +142,22 @@ class GenesisPriceSensor(CoordinatorEntity[GenesisEnergyDataUpdateCoordinator], 
             self._attr_native_unit_of_measurement, self._attr_icon = "NZD/day", "mdi:cash-check"
     @property
     def native_value(self) -> float | None:
-        plans = self.coordinator.data.get(DATA_API_BILLING_PLANS, {})
-        for site in plans.get("billingAccountSites", []):
-            for supply in site.get("supplyPoints", []):
+        plans = as_mapping(self.coordinator.data.get(DATA_API_BILLING_PLANS))
+        for site in plans.get("billingAccountSites", []) or []:
+            if not isinstance(site, Mapping):
+                continue
+            for supply in site.get("supplyPoints", []) or []:
+                if not isinstance(supply, Mapping):
+                    continue
                 if supply.get("supplyType") == self._supply_type:
-                    for tariff in supply.get("tariffs", []):
+                    for tariff in supply.get("tariffs", []) or []:
+                        if not isinstance(tariff, Mapping):
+                            continue
                         if tariff.get("name") == self._tariff_name:
-                            return abs(float(tariff.get("value", 0)))
+                            try:
+                                return abs(float(tariff.get("value", 0)))
+                            except (ValueError, TypeError):
+                                return None
         return None
 
 class LPGDetailsSensor(CoordinatorEntity[GenesisEnergyDataUpdateCoordinator], SensorEntity):
@@ -330,8 +340,7 @@ class UsageBreakdownSensor(CoordinatorEntity[GenesisEnergyDataUpdateCoordinator]
         self._attr_device_info, self._attr_unique_id = coordinator.device_info, f"{coordinator.config_entry.entry_id}_{key}"
     @property
     def _latest_breakdown_period(self):
-        b = self.coordinator.data.get(DATA_API_USAGE_BREAKDOWN)
-        return b["electricity"]["breakdowns"][0] if b and "electricity" in b and b["electricity"].get("breakdowns") else None
+        return latest_usage_breakdown(self.coordinator.data.get(DATA_API_USAGE_BREAKDOWN))
     @property
     def _category_data(self):
         if b := self._latest_breakdown_period:
@@ -418,7 +427,11 @@ class PowerShoutBalanceSensor(CoordinatorEntity[GenesisEnergyDataUpdateCoordinat
         self._attr_unique_id = f"{coordinator.config_entry.entry_id}_{self.entity_description.key}"
     @property
     def native_value(self):
-        try: return float(self.coordinator.data.get(DATA_API_POWERSHOUT_BALANCE, {}).get("balance"))
+        balance = as_mapping(self.coordinator.data.get(DATA_API_POWERSHOUT_BALANCE))
+        if not balance:
+            LOGGER.debug("PowerShout balance payload is absent or malformed.")
+            return None
+        try: return float(balance.get("balance"))
         except (ValueError, TypeError): return None
     @property
     def extra_state_attributes(self):
