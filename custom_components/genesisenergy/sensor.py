@@ -36,7 +36,7 @@ from .const import (
     SENSOR_KEY_BILL_ELEC_USED, SENSOR_KEY_BILL_GAS_USED, SENSOR_KEY_BILL_TOTAL_USED,
     SENSOR_KEY_BILL_ESTIMATED_TOTAL, SENSOR_KEY_BILL_ESTIMATED_FUTURE,
     DATA_API_GENERATION_MIX, DATA_API_GENERATION_MIX_REALTIME, SENSOR_KEY_GENERATION_MIX,
-    DATA_API_EV_PLAN_USAGE, DATA_API_EV_RATES, DATA_API_EV_INSIGHTS,
+    DATA_API_EV_PLAN_USAGE,
     SENSOR_KEY_EV_DAY_USAGE, SENSOR_KEY_EV_DAY_COST, SENSOR_KEY_EV_NIGHT_USAGE,
     SENSOR_KEY_EV_NIGHT_COST, SENSOR_KEY_EV_TOTAL_SAVINGS,
     DATA_API_ELECTRICITY_FORECAST, SENSOR_KEY_FORECAST_USAGE, SENSOR_KEY_FORECAST_COST,
@@ -65,7 +65,7 @@ async def async_setup_entry(hass: HomeAssistant, config_entry: ConfigEntry, asyn
             for supply_point in site.get("supplyPoints", []):
                 supply_type = supply_point.get("supplyType")
                 if supply_type == "electricity": has_electricity = True
-                elif supply_type == "naturalGas": has_gas = True
+                elif supply_type in ["naturalGas", "gas"]: has_gas = True
                 
                 for tariff in supply_point.get("tariffs", []):
                     t_name = tariff.get("name")
@@ -83,7 +83,7 @@ async def async_setup_entry(hass: HomeAssistant, config_entry: ConfigEntry, asyn
         if price_sensor_count > 0:
             LOGGER.info(f"Adding {price_sensor_count} dynamic price sensors from Genesis plan data. ✅")
 
-    if not has_electricity and (coordinator.data.get(DATA_API_ELECTRICITY_USAGE) or coordinator.data.get(DATA_API_EV_RATES)):
+    if not has_electricity and coordinator.data.get(DATA_API_ELECTRICITY_USAGE):
         has_electricity = True
 
     if has_electricity:
@@ -153,15 +153,6 @@ class GenesisPriceSensor(CoordinatorEntity[GenesisEnergyDataUpdateCoordinator], 
 
     @property
     def native_value(self) -> float | None:
-        ev_rates = self.coordinator.data.get(DATA_API_EV_RATES)
-        if ev_rates and isinstance(ev_rates, dict):
-            if "Day" in self._tariff_name and "dayRate" in ev_rates:
-                day_val = ev_rates["dayRate"].get("value")
-                if day_val is not None: return float(day_val)
-            if "Night" in self._tariff_name and "nightRate" in ev_rates:
-                night_val = ev_rates["nightRate"].get("value")
-                if night_val is not None: return float(night_val)
-
         plans = self.coordinator.data.get(DATA_API_BILLING_PLANS) or {}
         if isinstance(plans, dict):
             for site in plans.get("billingAccountSites", []):
@@ -169,7 +160,10 @@ class GenesisPriceSensor(CoordinatorEntity[GenesisEnergyDataUpdateCoordinator], 
                     if supply.get("supplyType") == self._supply_type:
                         for tariff in supply.get("tariffs", []):
                             if tariff.get("name") == self._tariff_name:
-                                return abs(float(tariff.get("value", 0)))
+                                try:
+                                    return abs(float(tariff.get("value", 0)))
+                                except (ValueError, TypeError):
+                                    return None
         return None
 
 class LPGDetailsSensor(CoordinatorEntity[GenesisEnergyDataUpdateCoordinator], SensorEntity):
@@ -222,27 +216,61 @@ class GenesisEnergyStatisticsSensor(CoordinatorEntity[GenesisEnergyDataUpdateCoo
         if not usage_data: return
         try: sorted_usage_data = sorted(usage_data, key=lambda x: x['startDate'])
         except (KeyError, TypeError): return
+        
         LOGGER.info(f"  Processing {len(usage_data)} entries for {self._fuel_type} (Force Overwrite: {force_overwrite})")
+
         async def _process_one_statistic(statistic_id: str, stat_name: str, unit: str, value_key: str):
-            running_sum, last_ts = 0.0, 0
-            if force_overwrite:
-                start_of_window = datetime.combine(start_date, datetime.min.time()).replace(tzinfo=timezone.utc) if start_date else dt_util.utcnow().replace(hour=0, minute=0, second=0, microsecond=0) - timedelta(days=3)
-                last_stats_before_window = await get_instance(self.hass).async_add_executor_job(statistics_during_period, self.hass, start_of_window - timedelta(days=1), start_of_window, {statistic_id}, "hour", None, {"sum"})
-                if statistic_id in last_stats_before_window and last_stats_before_window[statistic_id]:
-                    last_stat = last_stats_before_window[statistic_id][-1]; running_sum, last_ts = float(last_stat.get('sum', 0.0)), last_stat.get('start', 0)
+            running_sum = 0.0
+            last_ts = 0
+            
+            try:
+                first_entry_dt = datetime.fromisoformat(sorted_usage_data[0]['startDate']).astimezone(self._utc_tz)
+            except (KeyError, ValueError, TypeError, IndexError):
+                first_entry_dt = dt_util.utcnow()
+
+            # Query baseline history up to the first entry in this batch to prevent 12:00 AM sum jumps
+            prev_stats = await get_instance(self.hass).async_add_executor_job(
+                statistics_during_period,
+                self.hass,
+                datetime.fromtimestamp(0, tz=timezone.utc),
+                first_entry_dt,
+                {statistic_id},
+                "hour",
+                None,
+                {"sum"}
+            )
+            
+            if statistic_id in prev_stats and prev_stats[statistic_id]:
+                last_stat = prev_stats[statistic_id][-1]
+                running_sum = float(last_stat.get('sum', 0.0))
+                last_ts = int(last_stat.get('start', 0))
+                LOGGER.debug(f"[{self._fuel_type}] Found existing baseline sum: {running_sum:.2f} at timestamp {last_ts}")
             else:
-                last_stat_list = await get_instance(self.hass).async_add_executor_job(get_last_statistics, self.hass, 1, statistic_id, True, {"sum"})
-                if last_stat_list and statistic_id in last_stat_list:
-                    last_stat = last_stat_list[statistic_id][0]; running_sum, last_ts = float(last_stat.get('sum', 0.0)), last_stat.get('start', 0)
+                LOGGER.debug(f"[{self._fuel_type}] No prior baseline statistics found. Starting cumulative sum at 0.0")
+
             stats_to_add = []
             for entry in sorted_usage_data:
-                try: val, start_dt_utc = float(entry[value_key]), datetime.fromisoformat(entry['startDate']).astimezone(self._utc_tz)
-                except (KeyError, ValueError, TypeError): continue
-                if start_dt_utc.timestamp() > last_ts:
-                    running_sum += val; stats_to_add.append(StatisticData(start=start_dt_utc, state=round(val, 2), sum=round(running_sum, 2)))
+                try:
+                    raw_val = float(entry[value_key])
+                    # Clamp negative grid consumption to prevent non-monotonic sum drops
+                    val = max(0.0, raw_val) if unit in ["kWh", "m³"] else raw_val
+                    start_dt_utc = datetime.fromisoformat(entry['startDate']).astimezone(self._utc_tz)
+                    start_ts = int(start_dt_utc.timestamp())
+                except (KeyError, ValueError, TypeError):
+                    continue
+
+                if force_overwrite or start_ts > last_ts:
+                    running_sum += val
+                    stats_to_add.append(StatisticData(
+                        start=start_dt_utc,
+                        state=round(val, 2),
+                        sum=round(running_sum, 2)
+                    ))
+                    last_ts = start_ts
+
             if stats_to_add:
                 mode_str = "Overwrite" if force_overwrite else "Append"
-                LOGGER.info(f"  Importing {len(stats_to_add)} '{stat_name}' statistics (Mode: {mode_str}).")
+                LOGGER.info(f"  Importing {len(stats_to_add)} '{stat_name}' statistics (Mode: {mode_str}, Final Sum: {running_sum:.2f}).")
                 meta = StatisticMetaData(
                     has_mean=False,
                     mean_type=StatisticMeanType.NONE,
@@ -254,7 +282,9 @@ class GenesisEnergyStatisticsSensor(CoordinatorEntity[GenesisEnergyDataUpdateCoo
                     unit_class=None,
                 )
                 async_add_external_statistics(self.hass, meta, stats_to_add)
-            else: LOGGER.info(f"  No new data to import for '{stat_name}'.")
+            else:
+                LOGGER.info(f"  No new data points to import for '{stat_name}'.")
+
         await _process_one_statistic(self._consumption_statistic_id, self._consumption_statistic_name, self._unit, 'kw')
         await _process_one_statistic(self._cost_statistic_id, self._cost_statistic_name, self._currency, 'costNZD')
 
@@ -345,7 +375,6 @@ class EVTotalSavingsSensor(GenesisEVPlanSensor):
     def extra_state_attributes(self):
         attrs = super().extra_state_attributes or {}
         if h := self.coordinator.data.get(DATA_API_EV_PLAN_USAGE): attrs["history"] = h
-        if ins := self.coordinator.data.get(DATA_API_EV_INSIGHTS): attrs["insights"] = ins
         return attrs
 
 class ForecastSensor(CoordinatorEntity[GenesisEnergyDataUpdateCoordinator], SensorEntity):

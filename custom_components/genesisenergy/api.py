@@ -300,9 +300,9 @@ class GenesisEnergyApi:
         return response.get("status") == 200
         
     async def get_billing_plans(self):
+        """Gets all electricity and gas billing plan tariffs."""
         return await self._make_api_call("GET", "/v2/private/billing/plans", description="billing plans")
 
-    # --- New V2 Website Endpoints ---
     async def get_widget_bill_summary_v2(self):
         """Gets V2 consolidated bill summary and estimated usage."""
         return await self._make_api_call("GET", "/v2/private/drd/widget/billSummaryV2", description="widget bill summary V2")
@@ -310,19 +310,6 @@ class GenesisEnergyApi:
     async def get_generation_mix_realtime(self):
         """Gets real-time NZ grid generation mix."""
         return await self._make_api_call("GET", "/v2/private/generationMix/realTime", description="generation mix real-time")
-
-    async def get_ev_rates(self):
-        """Gets direct EV day and night rates."""
-        return await self._make_api_call("GET", "/v2/private/ev/rates/dayNight", description="EV day night rates")
-
-    async def get_ev_insights(self):
-        """Gets EV plan schedule and vehicle model insights."""
-        return await self._make_api_call("GET", "/v2/private/evPlan/evInsights", description="EV plan insights")
-
-    async def get_consolidation_usage_summary(self, start_date: str, end_date: str):
-        """Gets billing period consolidated usage summary."""
-        payload = {"startDate": start_date, "endDate": end_date}
-        return await self._make_api_call("POST", "/v2/private/consolidation/usage-summary", json_payload=payload, description="consolidation usage summary")
 
     async def get_widget_property_list(self): return await self._make_api_call("GET", "/v2/private/drd/widget/propertyList", description="widget property list")
     async def get_widget_property_switcher(self): return await self._make_api_call("GET", "/v2/private/drd/widget/propertySwitcher", description="widget property switcher")

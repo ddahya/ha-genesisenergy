@@ -64,23 +64,18 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
     LOGGER.info("Setting up platforms...✅")
 
-
-    def get_available_services(coordinator: GenesisEnergyDataUpdateCoordinator) -> tuple[bool, bool]:
-        """Checks billing plans and returns a tuple of (has_electricity, has_gas)."""
-        has_electricity = False
-        has_gas = False
-        billing_plans_data = coordinator.data.get(DATA_API_BILLING_PLANS)
-        if billing_plans_data and isinstance(billing_plans_data.get("billingAccountSites"), list):
-            for site in billing_plans_data["billingAccountSites"]:
-                if isinstance(site.get("supplyPoints"), list):
-                    for supply_point in site["supplyPoints"]:
-                        if isinstance(supply_point, dict):
-                            supply_type = supply_point.get("supplyType")
-                            if supply_type == "electricity":
-                                has_electricity = True
-                            elif supply_type == "naturalGas":
-                                has_gas = True
-        return has_electricity, has_gas
+    def get_available_services(coord: GenesisEnergyDataUpdateCoordinator) -> tuple[bool, bool]:
+        """Checks available services on the coordinator."""
+        has_elec = getattr(coord, "has_electricity", True)
+        has_gas = getattr(coord, "has_gas", False)
+        
+        for s in getattr(coord, "statistics_sensors", []):
+            if getattr(s, "_fuel_type", "") == "Electricity":
+                has_elec = True
+            elif getattr(s, "_fuel_type", "") == "Gas":
+                has_gas = True
+                
+        return has_elec, has_gas
 
     @callback
     async def async_add_powershout_booking_service(call: ServiceCall) -> None:
@@ -90,32 +85,37 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
         base_start_dt = start_dt_raw.replace(minute=0, second=0, microsecond=0)
         LOGGER.info(f"Attempting to book Power Shout for {requested_duration} hour(s) starting at {base_start_dt}")
-# Fix: honour isSelectedSite for Power Shout bookings
-# Power Shout bookings previously always used eligibleBillingAccounts[0]. Now uses the user's selected site (matching webSelectedSite), with fallback to [0] if none is flagged.
+        
         ps_info = coordinator.data.get(DATA_API_POWERSHOUT_INFO)
+        if not ps_info or not isinstance(ps_info, dict):
+            LOGGER.error("Could not book Power Shout: Power Shout data is unavailable.")
+            return
 
         supply_agreement_id, supply_point_id, loyalty_account_id = None, None, None
         try:
             loyalty_account_id = ps_info.get("loyaltyAccountId")
             
-            # Find the account marked as the user's currently selected site
-            # (matches webSelectedSite from the Genesis web portal)
             supply_point_data = None
             for account in ps_info.get("eligibleBillingAccounts", []):
                 for site in account.get("billingAccountSites", []):
                     if site.get("isSelectedSite") is True:
-                        supply_point_data = site["supplyPoints"][0]
-                        break
+                        supply_points = site.get("supplyPoints", [])
+                        if supply_points:
+                            supply_point_data = supply_points[0]
+                            break
                 if supply_point_data:
                     break
             
-            # Fallback to first eligible account if none flagged as selected
             if not supply_point_data:
-                supply_point_data = ps_info["eligibleBillingAccounts"][0]["billingAccountSites"][0]["supplyPoints"][0]
+                try:
+                    supply_point_data = ps_info["eligibleBillingAccounts"][0]["billingAccountSites"][0]["supplyPoints"][0]
+                except (KeyError, IndexError, TypeError):
+                    supply_point_data = None
             
-            supply_agreement_id = supply_point_data.get("supplyAgreementId")
-            supply_point_id = supply_point_data.get("id")
-        except (KeyError, IndexError, TypeError):
+            if supply_point_data:
+                supply_agreement_id = supply_point_data.get("supplyAgreementId")
+                supply_point_id = supply_point_data.get("id")
+        except (KeyError, IndexError, TypeError, AttributeError):
             pass
 
         if not all([supply_agreement_id, supply_point_id, loyalty_account_id]):
@@ -309,7 +309,6 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         hass.services.async_remove(DOMAIN, SERVICE_FORCE_UPDATE)
     
     entry.async_on_unload(_unload_services)
-    
     entry.async_on_unload(entry.add_update_listener(async_update_options))
 
     LOGGER.info(f"Genesis Energy setup complete for {entry.data[CONF_EMAIL]} ✅")
