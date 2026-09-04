@@ -25,7 +25,8 @@ from homeassistant.components.recorder.statistics import async_add_external_stat
 from .const import (
     DOMAIN, LOGGER, DATA_API_ELECTRICITY_USAGE, DATA_API_GAS_USAGE, DATA_API_POWERSHOUT_INFO,
     DATA_API_POWERSHOUT_BALANCE, DATA_API_POWERSHOUT_BOOKINGS, DATA_API_POWERSHOUT_OFFERS,
-    DATA_API_POWERSHOUT_EXPIRING, DATA_API_BILLING_PLANS, DATA_API_WIDGET_HERO, DATA_API_WIDGET_BILLS,
+    DATA_API_POWERSHOUT_EXPIRING, DATA_API_POWERSHOUT_RECOMMENDED_HOURS,
+    DATA_API_BILLING_PLANS, DATA_API_WIDGET_HERO, DATA_API_WIDGET_BILLS,
     STATISTIC_ID_ELECTRICITY_CONSUMPTION, STATISTIC_ID_ELECTRICITY_COST,
     STATISTIC_ID_GAS_CONSUMPTION, STATISTIC_ID_GAS_COST, SENSOR_KEY_POWERSHOUT_ELIGIBLE,
     SENSOR_KEY_POWERSHOUT_BALANCE, SENSOR_KEY_ACCOUNT_DETAILS,
@@ -244,7 +245,6 @@ class GenesisEnergyStatisticsSensor(CoordinatorEntity[GenesisEnergyDataUpdateCoo
                 last_stat = prev_stats[statistic_id][-1]
                 running_sum = float(last_stat.get('sum', 0.0))
                 last_ts = int(last_stat.get('start', 0))
-                LOGGER.debug(f"[{self._fuel_type}] Found existing baseline sum: {running_sum:.2f} at timestamp {last_ts}")
             else:
                 LOGGER.debug(f"[{self._fuel_type}] No prior baseline statistics found. Starting cumulative sum at 0.0")
 
@@ -252,7 +252,6 @@ class GenesisEnergyStatisticsSensor(CoordinatorEntity[GenesisEnergyDataUpdateCoo
             for entry in sorted_usage_data:
                 try:
                     raw_val = float(entry[value_key])
-                    # Clamp negative grid consumption to prevent non-monotonic sum drops
                     val = max(0.0, raw_val) if unit in ["kWh", "m³"] else raw_val
                     start_dt_utc = datetime.fromisoformat(entry['startDate']).astimezone(self._utc_tz)
                     start_ts = int(start_dt_utc.timestamp())
@@ -564,7 +563,7 @@ class PowerShoutBalanceSensor(CoordinatorEntity[GenesisEnergyDataUpdateCoordinat
             if isinstance(e, dict):
                 if m := e.get("expiringHoursMessage"): 
                     t_title = m.get("title"); substrings = m.get("titleSubstrings")
-                    if t_title and isinstance(substrings, list) and substrings:
+                    if t_title and substrings:
                         attrs["expiring_hours_message"] = t_title.replace("{{0}}", substrings[0].get("text", ""))
                     elif t_title: attrs["expiring_hours_message"] = t_title
                 if t_tip := e.get("messageTooltip"):
@@ -574,6 +573,16 @@ class PowerShoutBalanceSensor(CoordinatorEntity[GenesisEnergyDataUpdateCoordinat
                 b_list = b_data.get("bookings", []); attrs["bookings"] = b_list
                 u = sorted([x for x in b_list if isinstance(x, dict) and x.get("startDateTime") and datetime.fromisoformat(x["startDateTime"]).replace(tzinfo=timezone.utc) > dt_util.utcnow()], key=lambda x: x["startDateTime"])
                 if u: attrs["next_booking_start"] = u[0]["startDateTime"]
+
+        # Top Recommended Past Hours (New Genesis Feature)
+        if rec := self.coordinator.data.get(DATA_API_POWERSHOUT_RECOMMENDED_HOURS):
+            if isinstance(rec, dict):
+                rec_list = rec.get("recommendedHours", [])
+                attrs["recommended_hours_count"] = len(rec_list)
+                attrs["recommended_hours"] = rec_list
+                if rec_list:
+                    attrs["top_recommended_hour"] = rec_list[0]
+
         return attrs
 
 class GenesisEnergyAccountSensor(CoordinatorEntity[GenesisEnergyDataUpdateCoordinator], SensorEntity):
@@ -586,7 +595,7 @@ class GenesisEnergyAccountSensor(CoordinatorEntity[GenesisEnergyDataUpdateCoordi
     @property
     def extra_state_attributes(self) -> Mapping[str, Any] | None:
         if not self.coordinator.data or not isinstance(self.coordinator.data, dict): return None
-        k = [DATA_API_BILLING_PLANS, DATA_API_WIDGET_HERO, DATA_API_WIDGET_BILLS, DATA_API_WIDGET_BILLS_V2, DATA_API_WIDGET_PROPERTY_LIST, DATA_API_WIDGET_PROPERTY_SWITCHER, DATA_API_WIDGET_SIDEKICK, DATA_API_WIDGET_DASHBOARD_POWERSHOUT, DATA_API_WIDGET_ECO_TRACKER, DATA_API_WIDGET_DASHBOARD_LIST, DATA_API_WIDGET_ACTION_TILE_LIST, DATA_API_NEXT_BEST_ACTION]
+        k = [DATA_API_BILLING_PLANS, DATA_API_WIDGET_HERO, DATA_API_WIDGET_BILLS, DATA_API_WIDGET_BILLS_V2, DATA_API_WIDGET_PROPERTY_LIST, DATA_API_WIDGET_PROPERTY_SWITCHER, DATA_API_WIDGET_SIDEKICK, DATA_API_WIDGET_DASHBOARD_POWERSHOUT, DATA_API_WIDGET_ECO_TRACKER, DATA_API_WIDGET_DASHBOARD_LIST, DATA_API_WIDGET_ACTION_TILE_LIST, DATA_API_NEXT_BEST_ACTION, DATA_API_POWERSHOUT_RECOMMENDED_HOURS]
         attrs = {}
         for key in k:
             attr_name = key.replace("api_", ""); data = self.coordinator.data.get(key)

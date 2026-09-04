@@ -286,6 +286,21 @@ class GenesisEnergyApi:
     async def get_powershout_offers(self): return await self._make_api_call("GET", "/v2/private/powershoutcurrency/offers", description="Power Shout offers")
     async def get_powershout_expiring_hours(self): return await self._make_api_call("GET", "/v2/private/powershoutcurrency/expiringHours", description="Power Shout expiring")
 
+    async def get_powershout_recommended_hours(self, account_id: str, billing_account_id: str, icp_number: str, supply_agreement_id: str):
+        """Gets the top recommended past hours for Power Shout redemption."""
+        params = {
+            "accountId": account_id,
+            "billingAccountId": billing_account_id,
+            "icpNumber": icp_number,
+            "supplyAgreementId": supply_agreement_id,
+        }
+        return await self._make_api_call(
+            "GET",
+            "/v2/private/powershout/recommendedHours",
+            params=params,
+            description="Power Shout recommended hours",
+        )
+
     async def get_powershout_vouchers_for_date(self, selected_date_str: str, supply_point_id: str):
         params = {"selectedDate": selected_date_str, "supplyPointId": supply_point_id}
         return await self._make_api_call("GET", "/v2/private/powershoutcurrency/bookings", params=params, description="Power Shout vouchers for date")

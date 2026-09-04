@@ -18,8 +18,8 @@ from .const import (
     DOMAIN, LOGGER, DEFAULT_SCAN_INTERVAL_HOURS, CONF_EMAIL, CONF_PASSWORD,
     DEVICE_MANUFACTURER, DEVICE_MODEL, DATA_API_ELECTRICITY_USAGE, DATA_API_GAS_USAGE,
     DATA_API_POWERSHOUT_INFO, DATA_API_POWERSHOUT_BALANCE, DATA_API_POWERSHOUT_BOOKINGS,
-    DATA_API_POWERSHOUT_OFFERS, DATA_API_POWERSHOUT_EXPIRING, DATA_API_BILLING_PLANS,
-    DATA_API_WIDGET_HERO, DATA_API_WIDGET_BILLS_V2,
+    DATA_API_POWERSHOUT_OFFERS, DATA_API_POWERSHOUT_EXPIRING, DATA_API_POWERSHOUT_RECOMMENDED_HOURS,
+    DATA_API_BILLING_PLANS, DATA_API_WIDGET_HERO, DATA_API_WIDGET_BILLS_V2,
     DATA_API_WIDGET_PROPERTY_LIST, DATA_API_WIDGET_PROPERTY_SWITCHER,
     DATA_API_WIDGET_SIDEKICK, DATA_API_WIDGET_DASHBOARD_POWERSHOUT,
     DATA_API_GENERATION_MIX_REALTIME, DATA_API_EV_PLAN_USAGE,
@@ -150,6 +150,51 @@ class GenesisEnergyDataUpdateCoordinator(DataUpdateCoordinator[dict[str, any]]):
         bill_v2 = fetched_data.get(DATA_API_WIDGET_BILLS_V2)
         if bill_v2 and isinstance(bill_v2, dict) and bill_v2.get("billEstimated"):
             fetched_data[DATA_API_WIDGET_SIDEKICK] = bill_v2.get("billEstimated")
+
+        # 6. Fetch Top Recommended Past Power Shout Hours
+        ps_info = fetched_data.get(DATA_API_POWERSHOUT_INFO)
+        if ps_info and isinstance(ps_info, dict):
+            loyalty_id = ps_info.get("loyaltyAccountId")
+            eligible_accounts = ps_info.get("eligibleBillingAccounts", [])
+            
+            selected_account_id = None
+            selected_sp_id = None
+            selected_sa_id = None
+            
+            for acc in eligible_accounts:
+                acc_id = acc.get("id")
+                for site in acc.get("billingAccountSites", []):
+                    if site.get("isSelectedSite") is True:
+                        sps = site.get("supplyPoints", [])
+                        if sps:
+                            selected_account_id = acc_id
+                            selected_sp_id = sps[0].get("id")
+                            selected_sa_id = sps[0].get("supplyAgreementId")
+                            break
+                if selected_sp_id:
+                    break
+
+            if not selected_sp_id and eligible_accounts:
+                try:
+                    selected_account_id = eligible_accounts[0].get("id")
+                    first_sp = eligible_accounts[0]["billingAccountSites"][0]["supplyPoints"][0]
+                    selected_sp_id = first_sp.get("id")
+                    selected_sa_id = first_sp.get("supplyAgreementId")
+                except (IndexError, KeyError, TypeError):
+                    pass
+
+            if loyalty_id and selected_account_id and selected_sp_id and selected_sa_id:
+                try:
+                    rec_hours = await self.api.get_powershout_recommended_hours(
+                        account_id=loyalty_id,
+                        billing_account_id=selected_account_id,
+                        icp_number=selected_sp_id,
+                        supply_agreement_id=selected_sa_id
+                    )
+                    fetched_data[DATA_API_POWERSHOUT_RECOMMENDED_HOURS] = rec_hours
+                except Exception as err:
+                    LOGGER.debug("Could not fetch recommended Power Shout hours: %s", err)
+                    fetched_data[DATA_API_POWERSHOUT_RECOMMENDED_HOURS] = None
 
         # LPG handling
         if self.has_lpg or not self._services_detected:
