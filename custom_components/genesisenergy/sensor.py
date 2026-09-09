@@ -14,7 +14,7 @@ from homeassistant.helpers.update_coordinator import CoordinatorEntity
 from homeassistant.util import dt as dt_util
 
 from homeassistant.components.recorder import get_instance
-from homeassistant.components.recorder.models import StatisticData, StatisticMetaData
+from homeassistant.components.recorder.models import StatisticData, StatisticMeanType, StatisticMetaData
 from homeassistant.components.recorder.statistics import async_add_external_statistics, get_last_statistics, statistics_during_period
 
 from .const import (
@@ -215,7 +215,7 @@ class GenesisEnergyStatisticsSensor(CoordinatorEntity[GenesisEnergyDataUpdateCoo
             if stats_to_add:
                 mode_str = "Overwrite" if force_overwrite else "Append"
                 LOGGER.info(f"  Importing {len(stats_to_add)} '{stat_name}' statistics (Mode: {mode_str}).")
-                meta = StatisticMetaData(has_mean=False, has_sum=True, name=stat_name, source=DOMAIN, statistic_id=statistic_id, unit_of_measurement=unit)
+                meta = StatisticMetaData(mean_type=StatisticMeanType.NONE, has_sum=True, name=stat_name, source=DOMAIN, statistic_id=statistic_id, unit_of_measurement=unit)
                 async_add_external_statistics(self.hass, meta, stats_to_add)
             else: LOGGER.info(f"  No new data to import for '{stat_name}'.")
         await _process_one_statistic(self._consumption_statistic_id, self._consumption_statistic_name, self._unit, 'kw')
