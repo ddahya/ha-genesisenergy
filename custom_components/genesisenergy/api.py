@@ -8,18 +8,32 @@ import json
 from urllib.parse import parse_qs
 import socket
 import asyncio
+import base64
+import hashlib
+import os
 
+from homeassistant.util import dt as dt_util
 from .exceptions import CannotConnect, InvalidAuth
 
 _LOGGER = logging.getLogger(__name__)
 
-BROWSER_USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36"
+BROWSER_USER_AGENT = (
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+    "(KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36"
+)
+
+def _generate_pkce() -> tuple[str, str]:
+    """Generates a secure PKCE code verifier and code challenge."""
+    verifier = base64.urlsafe_b64encode(os.urandom(32)).decode("utf-8").rstrip("=")
+    challenge = base64.urlsafe_b64encode(hashlib.sha256(verifier.encode("utf-8")).digest()).decode("utf-8").rstrip("=")
+    return verifier, challenge
+
 
 class GenesisEnergyApi:
-    """API to interact with Genesis Energy services."""
+    """API client with Azure AD B2C PKCE & persistent 90-day token support."""
     TOKEN_VALIDITY_BUFFER_MINUTES = 5
 
-    def __init__(self, email: str, password: str) -> None:
+    def __init__(self, email: str, password: str, refresh_token: str | None = None, token_update_callback=None) -> None:
         self._client_id = "8e41676f-7601-4490-9786-85d74f387f47"
         self._redirect_uri = 'https://myaccount.genesisenergy.co.nz/auth/redirect'
         self._url_token_base = "https://auth.genesisenergy.co.nz/auth.genesisenergy.co.nz"
@@ -28,11 +42,18 @@ class GenesisEnergyApi:
         self._email = email
         self._password = password
         self._token: str | None = None
-        self._refresh_token: str | None = None
+        self._refresh_token: str | None = refresh_token
         self._access_token_absolute_expiry_ts: float = 0.0
-        self._refresh_token_absolute_expiry_ts: float = 0.0
         self._session: aiohttp.ClientSession | None = None
         self._lock = asyncio.Lock()
+        self._token_update_callback = token_update_callback
+        self._code_verifier: str | None = None
+
+        self._mfa_context: dict[str, Any] = {}
+
+    @property
+    def refresh_token(self) -> str | None:
+        return self._refresh_token
 
     async def _get_session(self) -> aiohttp.ClientSession:
         if self._session is None or self._session.closed:
@@ -49,181 +70,246 @@ class GenesisEnergyApi:
     
     def _get_setting_json(self, page: str) -> Mapping[str, Any] | None:
         for line in page.splitlines():
-            if line.startswith("var SETTINGS = ") and line.endswith(";"):
-                json_string = line.removeprefix("var SETTINGS = ").removesuffix(";")
+            if line.strip().startswith("var SETTINGS = ") and line.strip().endswith(";"):
+                json_string = line.strip().removeprefix("var SETTINGS = ").removesuffix(";")
                 try: return json.loads(json_string)
                 except json.JSONDecodeError as e: _LOGGER.error(f"JSONDecodeError: {e}"); return None
-        _LOGGER.warning("SETTINGS variable not found."); return None
+        return None
 
-    async def _perform_full_login(self) -> bool:
-        """Performs a full login using a temporary, clean session and manual cookie management."""
-        _LOGGER.info("Attempting full login...")
-        
-        connector = aiohttp.TCPConnector(family=socket.AF_INET)
-        async with aiohttp.ClientSession(connector=connector, cookie_jar=aiohttp.DummyCookieJar()) as session:
-            cookies = {}
-            
-            def update_cookies_from_response(response):
-                for cookie in response.cookies.values():
-                    cookies[cookie.key] = cookie.value
+    async def async_start_login(self) -> str:
+        """Authenticates with PKCE. Returns 'SUCCESS' or 'MFA_REQUIRED'."""
+        _LOGGER.info("Starting PKCE login flow...")
+        self._code_verifier, code_challenge = _generate_pkce()
 
-            def get_cookie_header():
-                return "; ".join([f"{k}={v}" for k, v in cookies.items()]) if cookies else None
+        cookie_jar = aiohttp.CookieJar(quote_cookie=False)
+        session = aiohttp.ClientSession(cookie_jar=cookie_jar)
+        base_headers = {"User-Agent": BROWSER_USER_AGENT}
 
-            try:
-                base_headers = {"User-Agent": BROWSER_USER_AGENT}
-                # Step 1
-                url_s1 = f"{self._url_token_base}/oauth2/v2.0/authorize"
-                p_s1 = {'p': self._p, 'client_id': self._client_id, 'response_type': 'code', 'response_mode': 'query', 'scope': f'openid offline_access {self._client_id}', 'redirect_uri': self._redirect_uri}
-                async with session.get(url_s1, params=p_s1, headers=base_headers) as r_s1:
-                    txt_s1 = await r_s1.text()
-                    update_cookies_from_response(r_s1)
-                    r_s1.raise_for_status()
-                _LOGGER.info("Login Step 1: Fetching initial auth page...✅")
-                sjson = self._get_setting_json(txt_s1)
-                if not sjson: raise CannotConnect("Login S1: no settings_json")
-                tid, csrf = sjson.get("transId"), sjson.get("csrf")
-                if not tid or not csrf: raise CannotConnect("Login S1: no tid/csrf")
-                
-                # Step 2
-                url_s2 = f"{self._url_token_base}/{self._p}/SelfAsserted?tx={tid}&p={self._p}"
-                pay_s2 = {"request_type": "RESPONSE", "email": self._email}
-                hdr_s2 = {**base_headers, 'X-CSRF-TOKEN': csrf, 'Cookie': get_cookie_header()}
-                async with session.post(url_s2, headers=hdr_s2, data=pay_s2) as r_s2:
-                    update_cookies_from_response(r_s2)
-                    r_s2.raise_for_status()
-                _LOGGER.info("Login Step 2: Posting email...✅")
+        try:
+            # 1. Authorize Page with PKCE
+            url_s1 = f"{self._url_token_base}/oauth2/v2.0/authorize"
+            params_s1 = {
+                "p": self._p,
+                "client_id": self._client_id,
+                "response_type": "code",
+                "response_mode": "query",
+                "scope": f"openid offline_access {self._client_id}",
+                "redirect_uri": self._redirect_uri,
+                "code_challenge": code_challenge,
+                "code_challenge_method": "S256",
+                "deviceId": "null",
+                "platform": "Web"
+            }
+            async with session.get(url_s1, params=params_s1, headers=base_headers) as r1:
+                txt_s1 = await r1.text()
+                r1.raise_for_status()
 
-                # Step 3
-                url_s3 = f"{self._url_token_base}/{self._p}/api/SelfAsserted/confirmed"
-                p_s3 = {'csrf_token': csrf, 'tx': tid, 'p': self._p}
-                hdr_s3 = {**base_headers, 'Referer': str(url_s2), 'Cookie': get_cookie_header()}
-                async with session.get(url_s3, params=p_s3, headers=hdr_s3) as r_s3:
-                    update_cookies_from_response(r_s3)
-                    r_s3.raise_for_status()
-                _LOGGER.info("Login Step 3: Confirming email...✅")
-                if 'x-ms-cpim-csrf' in cookies: csrf = cookies['x-ms-cpim-csrf']
-                else: raise CannotConnect("Login S3: CSRF cookie missing after confirm")
+            sjson1 = self._get_setting_json(txt_s1)
+            if not sjson1: raise CannotConnect("Login S1: no settings_json")
+            tid, csrf = sjson1.get("transId"), sjson1.get("csrf")
+            if not tid or not csrf: raise CannotConnect("Login S1: no tid/csrf")
 
-                # Step 4
-                url_s4 = f"{self._url_token_base}/{self._p}/SelfAsserted?tx={tid}&p={self._p}"
-                pay_s4 = {"request_type": "RESPONSE", "signInName": self._email, "password": self._password}
-                hdr_s4 = {**base_headers, 'X-CSRF-TOKEN': csrf, 'Cookie': get_cookie_header()}
-                async with session.post(url_s4, headers=hdr_s4, data=pay_s4) as r_s4:
-                    update_cookies_from_response(r_s4)
-                    if r_s4.status != 200:
-                        s4_text = await r_s4.text()
-                        if "The username or password provided in the request are invalid" in s4_text: raise InvalidAuth("Invalid username or password.")
-                        r_s4.raise_for_status()
-                _LOGGER.info("Login Step 4: Posting password...✅")
+            # 2. Post Email
+            url_s2 = f"{self._url_token_base}/{self._p}/SelfAsserted?tx={tid}&p={self._p}"
+            h2 = {**base_headers, 'X-CSRF-TOKEN': csrf, 'X-Requested-With': 'XMLHttpRequest'}
+            async with session.post(url_s2, headers=h2, data={"request_type": "RESPONSE", "email": self._email}) as r2:
+                r2.raise_for_status()
 
-                # Step 5
-                url_s5 = f"{self._url_token_base}/{self._p}/api/CombinedSigninAndSignup/confirmed"
-                p_s5 = {'rememberMe': 'false', 'csrf_token': csrf, 'tx': tid, 'p': self._p}
-                hdr_s5 = {**base_headers, 'Cookie': get_cookie_header()}
-                async with session.get(url_s5, params=p_s5, headers=hdr_s5, allow_redirects=False) as r_s5:
-                    if r_s5.status != 302: raise CannotConnect(f"Login S5: status {r_s5.status}")
-                    loc = r_s5.headers.get('Location', '')
-                _LOGGER.info("Login Step 5: Finalizing login to get redirect...✅")
-                if not loc: raise CannotConnect("Login S5: no location header")
-                
-                # Step 6
-                qpr = parse_qs(loc.split('?', 1)[1])
-                if 'error' in qpr: raise InvalidAuth(f"Login S5 error: {qpr['error'][0]}")
-                if 'code' not in qpr: raise CannotConnect("Login S5: no auth code")
-                code = qpr['code'][0]
-                url_s6 = f"{self._url_token_base}/{self._p}/oauth2/v2.0/token"
-                p_s6 = {'p': self._p, 'grant_type': 'authorization_code', 'client_id': self._client_id, 'scope': f'openid offline_access {self._client_id}', 'redirect_uri': self._redirect_uri, 'code': code}
-                async with session.get(url_s6, params=p_s6, headers=base_headers) as r_s6:
-                    if r_s6.status == 200:
-                        data_s6 = await r_s6.json()
-                        self._token = data_s6.get('access_token'); self._refresh_token = data_s6.get('refresh_token')
-                        expires_in = data_s6.get('expires_in', 0); rt_expires_in = data_s6.get('refresh_token_expires_in', 0)
-                        now_ts = datetime.now(timezone.utc).timestamp()
-                        self._access_token_absolute_expiry_ts = (now_ts + int(expires_in)) if expires_in else 0
-                        self._refresh_token_absolute_expiry_ts = (now_ts + int(rt_expires_in)) if rt_expires_in else 0
-                        if not self._token: raise InvalidAuth("Login S6: no access token")
-                        _LOGGER.info("Login Step 6: Exchanging code for token...✅")
-                        _LOGGER.info("Genesis Energy Full login successful.✅")
-                        return True
-                    else: raise CannotConnect(f"Login S6: status {r_s6.status}")
-            
-            except aiohttp.ClientError as e:
-                _LOGGER.warning(
-                    "A network error occurred during login (e.g., DNS failure, timeout). "
-                    "This is expected if internet is unavailable. Error: %s", e
-                )
-                raise CannotConnect(f"Network error during login: {e}") from e
-            except Exception as e:
-                _LOGGER.error(f"Login FAILED with an unexpected exception: {e}", exc_info=True)
-                raise CannotConnect(f"A low-level error occurred during login: {e}") from e
+            # 3. Confirm Email
+            url_s3 = f"{self._url_token_base}/{self._p}/api/SelfAsserted/confirmed"
+            async with session.get(url_s3, params={'csrf_token': csrf, 'tx': tid, 'p': self._p}, headers={**base_headers, 'Referer': url_s2}) as r3:
+                r3.raise_for_status()
+                for cookie in session.cookie_jar:
+                    if cookie.key == "x-ms-cpim-csrf":
+                        csrf = cookie.value
 
-    async def _refresh_access_token(self) -> bool:
-        """Refreshes the access token and handles network errors gracefully."""
-        _LOGGER.info("Attempting to refresh access token...")
-        if not self._refresh_token: return False
-        
+            # 4. Post Password
+            url_s4 = f"{self._url_token_base}/{self._p}/SelfAsserted?tx={tid}&p={self._p}"
+            h4 = {**base_headers, 'X-CSRF-TOKEN': csrf, 'X-Requested-With': 'XMLHttpRequest'}
+            async with session.post(url_s4, headers=h4, data={"request_type": "RESPONSE", "signInName": self._email, "password": self._password}) as r4:
+                if r4.status != 200:
+                    s4_text = await r4.text()
+                    if "invalid" in s4_text.lower(): raise InvalidAuth("Invalid username or password.")
+                    r4.raise_for_status()
+
+            # 5. CombinedSigninAndSignup
+            url_s5 = f"{self._url_token_base}/{self._p}/api/CombinedSigninAndSignup/confirmed"
+            async with session.get(url_s5, params={'rememberMe': 'false', 'csrf_token': csrf, 'tx': tid, 'p': self._p}, headers=base_headers, allow_redirects=False) as r5:
+                loc = r5.headers.get('Location', '')
+                txt_s5 = await r5.text()
+
+                sjson5 = self._get_setting_json(txt_s5)
+                if sjson5 and sjson5.get("csrf"): csrf = sjson5["csrf"]
+                if sjson5 and sjson5.get("transId"): tid = sjson5["transId"]
+                for cookie in session.cookie_jar:
+                    if cookie.key == "x-ms-cpim-csrf": csrf = cookie.value
+
+            # Direct Success with PKCE
+            if "code=" in loc:
+                auth_code = parse_qs(loc.split('?', 1)[1])['code'][0]
+                await session.close()
+                await self._exchange_code_for_tokens(auth_code)
+                return "SUCCESS"
+
+            # Step 14 confirmation if MFA requested
+            url_step14 = f"{self._url_token_base}/{self._p}/api/SelfAsserted/confirmed"
+            async with session.get(url_step14, params={"csrf_token": csrf, "tx": tid, "p": self._p}, headers={**base_headers, "Referer": url_s4}) as r14:
+                txt_14 = await r14.text()
+                sjson14 = self._get_setting_json(txt_14)
+                if sjson14 and sjson14.get("csrf"): csrf = sjson14["csrf"]
+                if sjson14 and sjson14.get("transId"): tid = sjson14["transId"]
+                for cookie in session.cookie_jar:
+                    if cookie.key == "x-ms-cpim-csrf": csrf = cookie.value
+
+            self._mfa_context = {
+                "tid": tid,
+                "csrf": csrf,
+                "session": session,
+                "url_step14": url_step14,
+                "url_s5": url_s5,
+            }
+            return "MFA_REQUIRED"
+
+        except (InvalidAuth, CannotConnect):
+            await session.close()
+            raise
+        except Exception as e:
+            await session.close()
+            _LOGGER.error("Error during PKCE login initiation: %s", e)
+            raise CannotConnect(f"Login error: {e}") from e
+
+    async def async_submit_mfa_code(self, verification_code: str) -> bool:
+        """Submits 6-digit email code and exchanges for 90-day tokens."""
+        if not self._mfa_context:
+            raise CannotConnect("MFA session expired. Please start over.")
+
+        tid = self._mfa_context["tid"]
+        csrf = self._mfa_context["csrf"]
+        session: aiohttp.ClientSession = self._mfa_context["session"]
+        url_step14 = self._mfa_context["url_step14"]
+        url_s5 = self._mfa_context["url_s5"]
+
+        h_send = {
+            "User-Agent": BROWSER_USER_AGENT,
+            "X-CSRF-TOKEN": csrf,
+            "Origin": "https://auth.genesisenergy.co.nz",
+            "Referer": f"{url_step14}?csrf_token={csrf}&tx={tid}&p={self._p}",
+            "Content-Type": "application/x-www-form-urlencoded; charset=UTF-8",
+            "X-Requested-With": "XMLHttpRequest",
+            "Accept": "application/json, text/javascript, */*; q=0.01"
+        }
+
+        try:
+            url_verify = f"{self._url_token_base}/{self._p}/SelfAsserted/DisplayControlAction/vbeta/emailVerificationControl/VerifyCode?tx={tid}&p={self._p}"
+            async with session.post(url_verify, headers=h_send, data={"readOnlyEmail": self._email, "verificationCode": verification_code}) as r_ver:
+                ver_text = await r_ver.text()
+                if r_ver.status != 200 or '"status":"200"' not in ver_text:
+                    raise InvalidAuth("Invalid verification code.")
+
+            url_form = f"{self._url_token_base}/{self._p}/SelfAsserted?tx={tid}&p={self._p}"
+            async with session.post(url_form, headers=h_send, data={"readOnlyEmail": self._email, "verificationCode": verification_code, "request_type": "RESPONSE"}) as r_form:
+                if r_form.status != 200:
+                    raise CannotConnect("MFA form confirmation failed.")
+
+            async with session.get(url_s5, params={"rememberMe": "false", "csrf_token": csrf, "tx": tid, "p": self._p}, headers={"User-Agent": BROWSER_USER_AGENT}, allow_redirects=False) as r_final:
+                final_loc = r_final.headers.get("Location", "")
+
+            if "code=" not in final_loc:
+                raise CannotConnect("Failed to parse code from redirect.")
+
+            auth_code = parse_qs(final_loc.split("?", 1)[1])["code"][0]
+            await self._exchange_code_for_tokens(auth_code)
+            return True
+
+        finally:
+            await session.close()
+            self._mfa_context = {}
+
+    async def _exchange_code_for_tokens(self, auth_code: str) -> None:
+        """Exchanges auth code for access & 90-day refresh tokens with PKCE verifier."""
+        url_token = f"{self._url_token_base}/{self._p}/oauth2/v2.0/token"
+        payload = {
+            "p": self._p,
+            "grant_type": "authorization_code",
+            "client_id": self._client_id,
+            "scope": f"openid offline_access {self._client_id}",
+            "redirect_uri": self._redirect_uri,
+            "code": auth_code,
+        }
+        if self._code_verifier:
+            payload["code_verifier"] = self._code_verifier
+
         connector = aiohttp.TCPConnector(family=socket.AF_INET)
         async with aiohttp.ClientSession(connector=connector) as session:
-            payload = {"grant_type": "refresh_token", "client_id": self._client_id, "scope": f"openid offline_access {self._client_id}", "redirect_uri": self._redirect_uri, "refresh_token": self._refresh_token}
+            async with session.post(url_token, data=payload, headers={"User-Agent": BROWSER_USER_AGENT}) as resp:
+                if resp.status == 200:
+                    data = await resp.json()
+                    self._token = data.get("access_token")
+                    self._refresh_token = data.get("refresh_token")
+                    expires_in = data.get("expires_in", 3600)
+                    now_ts = datetime.now(timezone.utc).timestamp()
+                    self._access_token_absolute_expiry_ts = now_ts + int(expires_in)
+
+                    _LOGGER.info("Tokens captured! Refresh token valid for 90 days. ✅")
+                    if self._token_update_callback and self._refresh_token:
+                        self._token_update_callback(self._refresh_token)
+                else:
+                    _LOGGER.error("Token exchange failed with status %s: %s", resp.status, await resp.text())
+                    raise CannotConnect("Token exchange failed.")
+
+    async def _refresh_access_token(self) -> bool:
+        """Refreshes the access token using the stored 90-day refresh token."""
+        if not self._refresh_token:
+            return False
+
+        _LOGGER.debug("Refreshing access token via 90-day refresh token...")
+        connector = aiohttp.TCPConnector(family=socket.AF_INET)
+        async with aiohttp.ClientSession(connector=connector) as session:
+            payload = {
+                "grant_type": "refresh_token",
+                "client_id": self._client_id,
+                "scope": f"openid offline_access {self._client_id}",
+                "redirect_uri": self._redirect_uri,
+                "refresh_token": self._refresh_token,
+            }
             url = f"{self._url_token_base}/oauth2/v2.0/token?p={self._p}"
             try:
                 async with session.post(url, data=payload, headers={"User-Agent": BROWSER_USER_AGENT}) as response:
                     if response.status == 200:
                         data = await response.json()
                         self._token = data.get("access_token")
-                        new_expires_in = data.get("expires_in")
-                        if self._token and new_expires_in is not None:
-                            now_ts = datetime.now(timezone.utc).timestamp()
-                            self._access_token_absolute_expiry_ts = now_ts + int(new_expires_in)
-                            _LOGGER.info("Access token refreshed successfully.✅")
-                            new_rt = data.get("refresh_token")
-                            if new_rt and new_rt != self._refresh_token:
-                                self._refresh_token = new_rt
-                                new_rt_expires_in = data.get("refresh_token_expires_in")
-                                if new_rt_expires_in is not None: self._refresh_token_absolute_expiry_ts = now_ts + int(new_rt_expires_in)
-                                _LOGGER.info("Refresh token was rotated.✅")
-                            return True
-                        _LOGGER.warning("Token refresh response was OK but malformed.❌")
-                        return False
-                    else:
-                        if response.status in [400, 401]:
-                            _LOGGER.warning("Refresh token is invalid. Forcing full re-login.❌")
-                            self._refresh_token = None
-                            self._refresh_token_absolute_expiry_ts = 0
-                        else:
-                            _LOGGER.error(f"Unexpected status {response.status} during token refresh.❌")
-                        return False
-
-            except aiohttp.ClientError as e:
-                _LOGGER.warning("A network error occurred during token refresh: %s", e)
-                raise CannotConnect(f"Network error during token refresh: {e}") from e
-
+                        new_expires_in = data.get("expires_in", 3600)
+                        now_ts = datetime.now(timezone.utc).timestamp()
+                        self._access_token_absolute_expiry_ts = now_ts + int(new_expires_in)
+                        new_rt = data.get("refresh_token")
+                        if new_rt and new_rt != self._refresh_token:
+                            self._refresh_token = new_rt
+                            if self._token_update_callback:
+                                self._token_update_callback(self._refresh_token)
+                        _LOGGER.debug("Access token renewed successfully in background. ✅")
+                        return True
+                    return False
             except Exception as e:
-                _LOGGER.exception("An unexpected error occurred during token refresh.")
+                _LOGGER.debug("Token refresh network issue: %s", e)
                 return False
 
     async def _ensure_valid_token(self) -> None:
-        """Ensures the access token is valid, refreshing if necessary, using a lock to prevent race conditions."""
-        current_time_utc_ts = datetime.now(timezone.utc).timestamp()
-        if self._token and self._access_token_absolute_expiry_ts > (current_time_utc_ts + self.TOKEN_VALIDITY_BUFFER_MINUTES * 60):
+        """Ensures access token is valid, refreshing via 90-day refresh token."""
+        current_time = datetime.now(timezone.utc).timestamp()
+        if self._token and self._access_token_absolute_expiry_ts > (current_time + self.TOKEN_VALIDITY_BUFFER_MINUTES * 60):
             return
 
         async with self._lock:
             if self._token and self._access_token_absolute_expiry_ts > (datetime.now(timezone.utc).timestamp() + self.TOKEN_VALIDITY_BUFFER_MINUTES * 60):
                 return
-            
-            _LOGGER.info("Token has expired or is invalid. Proceeding with refresh/login under lock.")
 
-            try:
-                if self._refresh_token and (self._refresh_token_absolute_expiry_ts == 0 or self._refresh_token_absolute_expiry_ts > datetime.now(timezone.utc).timestamp()):
-                    if await self._refresh_access_token():
-                        return
-            except CannotConnect:
-                raise
-                
-            if not await self._perform_full_login(): raise CannotConnect("Full login failed.")
-            if not (self._token and self._access_token_absolute_expiry_ts > (datetime.now(timezone.utc).timestamp() + self.TOKEN_VALIDITY_BUFFER_MINUTES * 60)): raise InvalidAuth("Token invalid after login.")
+            if self._refresh_token:
+                if await self._refresh_access_token():
+                    return
+
+            res = await self.async_start_login()
+            if res != "SUCCESS":
+                raise InvalidAuth("Login re-authentication required.")
 
     async def _make_api_call(self, method: str, endpoint: str, params: dict | None = None, json_payload: dict | None = None, description: str = "data", expect_json: bool = True) -> Any:
         await self._ensure_valid_token()
@@ -241,41 +327,32 @@ class GenesisEnergyApi:
                         return json.loads(text) if text else {}
                     return {"status": response.status, "text": await response.text()}
                 elif response.status == 401:
-                    self._token = None; self._access_token_absolute_expiry_ts = 0
+                    self._token = None
+                    self._access_token_absolute_expiry_ts = 0
                     raise InvalidAuth(f"Unauthorized (401) for {description}")
                 else:
                     raise CannotConnect(f"API error for {description}: {response.status} - {await response.text()}")
         except aiohttp.ClientError as e: raise CannotConnect(f"HTTP client error for {description}: {e}") from e
         except json.JSONDecodeError as e: raise CannotConnect(f"Invalid JSON from {description}: {e}") from e
-    
+
     async def get_energy_data(self, days_to_fetch: int = 4):
-        from_date = (datetime.now() - timedelta(days=days_to_fetch)).strftime("%Y-%m-%d")
-        to_date = datetime.now().strftime("%Y-%m-%d")
+        now_local = dt_util.now()
+        from_date = (now_local - timedelta(days=days_to_fetch)).strftime("%Y-%m-%d")
+        to_date = now_local.strftime("%Y-%m-%d")
         payload = {'startDate': from_date, 'endDate': to_date, 'intervalType': "HOURLY"}
         return await self._make_api_call("POST", "/v2/private/electricity/site-usage", json_payload=payload, description="electricity usage")
         
-    async def get_ev_plan_usage(self):
-        """Gets electricity usage specifically for an EV plan."""
-        return await self._make_api_call("GET", "/v2/private/evPlan/electricityUsage", description="EV plan usage")
-
+    async def get_ev_plan_usage(self): return await self._make_api_call("GET", "/v2/private/evPlan/electricityUsage", description="EV plan usage")
     async def get_gas_data(self, days_to_fetch: int = 4):
-        from_date = (datetime.now() - timedelta(days=days_to_fetch)).strftime("%Y-%m-%d")
-        to_date = datetime.now().strftime("%Y-%m-%d")
+        now_local = dt_util.now()
+        from_date = (now_local - timedelta(days=days_to_fetch)).strftime("%Y-%m-%d")
+        to_date = now_local.strftime("%Y-%m-%d")
         params = {'startDate': from_date, 'endDate': to_date, 'intervalType': "HOURLY"}
         return await self._make_api_call("GET", "/v2/private/naturalgas/advanced/usage", params=params, description="gas usage")
-    
-    async def get_electricity_forecast(self):
-        """Gets the electricity forecast."""
-        return await self._make_api_call("GET", "/v2/private/electricityForecast", description="electricity forecast")
-        
-    async def get_usage_breakdown(self):
-        """Gets the electricity usage breakdown by category."""
-        return await self._make_api_call("GET", "/v2/private/insights/usagebreakdown", params={"environment": "web"}, description="usage breakdown")
-
+    async def get_electricity_forecast(self): return await self._make_api_call("GET", "/v2/private/electricityForecast", description="electricity forecast")
     async def get_energy_data_for_period(self, start_date_str: str, end_date_str: str):
         payload = {'startDate': start_date_str, 'endDate': end_date_str, 'intervalType': "HOURLY"}
         return await self._make_api_call("POST", "/v2/private/electricity/site-usage", json_payload=payload, description=f"electricity usage for {start_date_str}-{end_date_str}")
-
     async def get_gas_data_for_period(self, start_date_str: str, end_date_str: str):
         params = {'startDate': start_date_str, 'endDate': end_date_str, 'intervalType': "HOURLY"}
         return await self._make_api_call("GET", "/v2/private/naturalgas/advanced/usage", params=params, description=f"gas usage for {start_date_str}-{end_date_str}")
@@ -285,47 +362,22 @@ class GenesisEnergyApi:
     async def get_powershout_bookings(self): return await self._make_api_call("GET", "/v2/private/powershoutcurrency/bookings", description="Power Shout bookings")
     async def get_powershout_offers(self): return await self._make_api_call("GET", "/v2/private/powershoutcurrency/offers", description="Power Shout offers")
     async def get_powershout_expiring_hours(self): return await self._make_api_call("GET", "/v2/private/powershoutcurrency/expiringHours", description="Power Shout expiring")
-
     async def get_powershout_recommended_hours(self, account_id: str, billing_account_id: str, icp_number: str, supply_agreement_id: str):
-        """Gets the top recommended past hours for Power Shout redemption."""
-        params = {
-            "accountId": account_id,
-            "billingAccountId": billing_account_id,
-            "icpNumber": icp_number,
-            "supplyAgreementId": supply_agreement_id,
-        }
-        return await self._make_api_call(
-            "GET",
-            "/v2/private/powershout/recommendedHours",
-            params=params,
-            description="Power Shout recommended hours",
-        )
-
+        params = {"accountId": account_id, "billingAccountId": billing_account_id, "icpNumber": icp_number, "supplyAgreementId": supply_agreement_id}
+        return await self._make_api_call("GET", "/v2/private/powershout/recommendedHours", params=params, description="Power Shout recommended hours")
     async def get_powershout_vouchers_for_date(self, selected_date_str: str, supply_point_id: str):
-        params = {"selectedDate": selected_date_str, "supplyPointId": supply_point_id}
-        return await self._make_api_call("GET", "/v2/private/powershoutcurrency/bookings", params=params, description="Power Shout vouchers for date")
-
+        return await self._make_api_call("GET", "/v2/private/powershoutcurrency/bookings", params={"selectedDate": selected_date_str, "supplyPointId": supply_point_id}, description="Power Shout vouchers for date")
     async def add_powershout_booking(self, start_date_str: str, duration: int, supply_agreement_id: str, supply_point_id: str, loyalty_account_id: str, eco_hours: list, vouchers: list):
         payload = {"startDate": start_date_str, "supplyAgreementId": supply_agreement_id, "duration": duration, "supplyPointId": supply_point_id, "loyaltyAccountId": loyalty_account_id, "ecoHours": eco_hours, "vouchers": vouchers}
         return await self._make_api_call("POST", "/v2/private/powershoutcurrency/booking/add", json_payload=payload, description="add Power Shout booking", expect_json=False)
-    
     async def accept_powershout_offer(self, loyalty_account_id: str, member_id: str, campaign_offer_id: str, quantity: int, offer_code: str) -> bool:
         payload = {"loyaltyAccountId": loyalty_account_id, "memberId": member_id, "campaignOfferId": campaign_offer_id, "quantity": quantity, "offerCode": offer_code}
         response = await self._make_api_call("POST", "/v2/private/powershoutcurrency/offer/accept", json_payload=payload, description="accept Power Shout offer", expect_json=False)
         return response.get("status") == 200
-        
-    async def get_billing_plans(self):
-        """Gets all electricity and gas billing plan tariffs."""
-        return await self._make_api_call("GET", "/v2/private/billing/plans", description="billing plans")
 
-    async def get_widget_bill_summary_v2(self):
-        """Gets V2 consolidated bill summary and estimated usage."""
-        return await self._make_api_call("GET", "/v2/private/drd/widget/billSummaryV2", description="widget bill summary V2")
-
-    async def get_generation_mix_realtime(self):
-        """Gets real-time NZ grid generation mix."""
-        return await self._make_api_call("GET", "/v2/private/generationMix/realTime", description="generation mix real-time")
-
+    async def get_billing_plans(self): return await self._make_api_call("GET", "/v2/private/billing/plans", description="billing plans")
+    async def get_widget_bill_summary_v2(self): return await self._make_api_call("GET", "/v2/private/drd/widget/billSummaryV2", description="widget bill summary V2")
+    async def get_generation_mix_realtime(self): return await self._make_api_call("GET", "/v2/private/generationMix/realTime", description="generation mix real-time")
     async def get_widget_property_list(self): return await self._make_api_call("GET", "/v2/private/drd/widget/propertyList", description="widget property list")
     async def get_widget_property_switcher(self): return await self._make_api_call("GET", "/v2/private/drd/widget/propertySwitcher", description="widget property switcher")
     async def get_widget_hero_info(self): return await self._make_api_call("GET", "/v2/private/drd/widget/hero/info", description="widget hero info")

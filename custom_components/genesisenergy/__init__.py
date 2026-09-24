@@ -163,7 +163,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
                 if success:
                     successful_bookings += 1
-                    await asyncio.sleep(1) 
+                    await asyncio.sleep(0.5) 
                 else:
                     LOGGER.error(f"Failed to book hour {i+1} of {requested_duration}. Stopping.")
                     break
@@ -324,5 +324,9 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     return unload_ok
 
 async def async_update_options(hass: HomeAssistant, entry: ConfigEntry) -> None:
-    """Reload entry on options update."""
-    await hass.config_entries.async_reload(entry.entry_id)
+    """Reload entry ONLY when user options (like Auto-Correction) change in the UI."""
+    coordinator = hass.data.get(DOMAIN, {}).get(entry.entry_id)
+    if coordinator and coordinator._current_options != entry.options:
+        coordinator._current_options = dict(entry.options)
+        LOGGER.info("User updated integration options. Reloading Genesis Energy entry...")
+        await hass.config_entries.async_reload(entry.entry_id)

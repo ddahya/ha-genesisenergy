@@ -8,14 +8,19 @@ import homeassistant.helpers.config_validation as cv
 
 from .api import GenesisEnergyApi
 from homeassistant.core import callback
-from .const import DOMAIN, INTEGRATION_NAME, CONF_ENABLE_AUTO_CORRECTION
+from .const import DOMAIN, INTEGRATION_NAME, CONF_ENABLE_AUTO_CORRECTION, CONF_REFRESH_TOKEN, CONF_VERIFICATION_CODE
 from .exceptions import InvalidAuth, CannotConnect
 
 _LOGGER = logging.getLogger(__name__)
 
 class GenesisEnergyConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
-    """Handle a config flow for Genesis Energy."""
+    """Handle a config flow for Genesis Energy with PKCE & 90-day tokens."""
     VERSION = 1
+
+    def __init__(self):
+        self._email: str | None = None
+        self._password: str | None = None
+        self._api: GenesisEnergyApi | None = None
 
     @staticmethod
     @callback
@@ -23,29 +28,40 @@ class GenesisEnergyConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         return GenesisEnergyOptionsFlow(config_entry)
 
     async def async_step_user(self, user_input: dict | None = None):
+        """Step 1: Enter email and password."""
         errors: dict[str, str] = {}
         if user_input is not None:
-            await self.async_set_unique_id(user_input[CONF_EMAIL].lower())
+            self._email = user_input[CONF_EMAIL].strip().lower()
+            self._password = user_input[CONF_PASSWORD].strip()
+
+            await self.async_set_unique_id(self._email)
             self._abort_if_unique_id_configured()
 
-            api = GenesisEnergyApi(user_input[CONF_EMAIL], user_input[CONF_PASSWORD])
-            
+            self._api = GenesisEnergyApi(self._email, self._password)
+
             try:
-                await api._ensure_valid_token()
-                _LOGGER.info("Config flow: Authentication successful.")
-                return self.async_create_entry(title=INTEGRATION_NAME, data=user_input)
-            
-            except InvalidAuth as e:
-                _LOGGER.warning(f"Config flow failed with InvalidAuth: {e}")
+                res = await self._api.async_start_login()
+                if res == "MFA_REQUIRED":
+                    return await self.async_step_mfa()
+                
+                # Direct PKCE login succeeded
+                _LOGGER.info("Config flow: PKCE direct authentication successful.")
+                return self.async_create_entry(
+                    title=INTEGRATION_NAME,
+                    data={
+                        CONF_EMAIL: self._email,
+                        CONF_PASSWORD: self._password,
+                        CONF_REFRESH_TOKEN: self._api.refresh_token,
+                    }
+                )
+
+            except InvalidAuth:
                 errors["base"] = "invalid_auth"
-            except CannotConnect as e:
-                _LOGGER.warning(f"Config flow failed with CannotConnect: {e}")
+            except CannotConnect:
                 errors["base"] = "cannot_connect"
-            except Exception:
-                _LOGGER.exception("Config flow failed with an unexpected exception")
+            except Exception as e:
+                _LOGGER.exception("Config flow step user exception: %s", e)
                 errors["base"] = "unknown"
-            finally:
-                await api.close()
 
         return self.async_show_form(
             step_id="user",
@@ -56,23 +72,50 @@ class GenesisEnergyConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             errors=errors,
         )
 
+    async def async_step_mfa(self, user_input: dict | None = None):
+        """Step 2: (Fallback) Enter 6-digit email code if ever prompted."""
+        errors: dict[str, str] = {}
+        if user_input is not None and self._api:
+            code = user_input[CONF_VERIFICATION_CODE].strip()
+            try:
+                success = await self._api.async_submit_mfa_code(code)
+                if success:
+                    return self.async_create_entry(
+                        title=INTEGRATION_NAME,
+                        data={
+                            CONF_EMAIL: self._email,
+                            CONF_PASSWORD: self._password,
+                            CONF_REFRESH_TOKEN: self._api.refresh_token,
+                        }
+                    )
+                errors["base"] = "invalid_auth"
+
+            except InvalidAuth:
+                errors["base"] = "invalid_auth"
+            except Exception as e:
+                _LOGGER.exception("MFA verification error: %s", e)
+                errors["base"] = "cannot_connect"
+
+        return self.async_show_form(
+            step_id="mfa",
+            data_schema=vol.Schema({
+                vol.Required(CONF_VERIFICATION_CODE): cv.string,
+            }),
+            description_placeholders={"email": self._email or "your email"},
+            errors=errors,
+        )
+
 class GenesisEnergyOptionsFlow(config_entries.OptionsFlow):
     """Handle options for the Genesis Energy integration."""
 
     def __init__(self, config_entry: config_entries.ConfigEntry) -> None:
-        """Initialize options flow."""
-        # NOTE: In recent HA versions, self.config_entry is a property and cannot be set.
-        # We simply pass here; the property will work automatically in async_step_init.
         pass
 
     async def async_step_init(self, user_input: dict | None = None):
-        """Manage the options."""
         if user_input is not None:
             return self.async_create_entry(title="", data=user_input)
 
-        # Default is False (Disabled)
         current_value = self.config_entry.options.get(CONF_ENABLE_AUTO_CORRECTION, False)
-
         return self.async_show_form(
             step_id="init",
             data_schema=vol.Schema({

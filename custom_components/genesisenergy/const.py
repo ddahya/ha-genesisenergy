@@ -13,6 +13,8 @@ PLATFORMS: Final = ["sensor", "binary_sensor"]
 # --- Configuration ---
 CONF_EMAIL: Final = "email"
 CONF_PASSWORD: Final = "password"
+CONF_REFRESH_TOKEN: Final = "refresh_token"
+CONF_VERIFICATION_CODE: Final = "verification_code"
 DEFAULT_SCAN_INTERVAL_HOURS: Final = 1
 CONF_ENABLE_AUTO_CORRECTION: Final = "enable_auto_correction"
 DAILY_OVERWRITE_HOUR: Final = 13

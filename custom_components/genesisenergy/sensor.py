@@ -192,6 +192,11 @@ class GenesisEnergyStatisticsSensor(CoordinatorEntity[GenesisEnergyDataUpdateCoo
         else: self._consumption_statistic_id, self._cost_statistic_id = STATISTIC_ID_GAS_CONSUMPTION, STATISTIC_ID_GAS_COST
         self._consumption_statistic_name, self._cost_statistic_name, self._unit, self._currency, self._processed_data_hash, self._utc_tz, self._last_daily_override_date = f"Genesis {fuel_type} Consumption Daily", f"Genesis {fuel_type} Cost Daily", "kWh", "NZD", None, ZoneInfo("UTC"), None
 
+    async def async_added_to_hass(self) -> None:
+        """Handle entity added to Home Assistant, immediately processing initial data."""
+        await super().async_added_to_hass()
+        self._handle_coordinator_update()
+
     @property
     def native_value(self) -> str:
         if self.coordinator.data and (api_data := self.coordinator.data.get(self._data_key)) and api_data.get("usage"): return "ok"
@@ -205,10 +210,13 @@ class GenesisEnergyStatisticsSensor(CoordinatorEntity[GenesisEnergyDataUpdateCoo
             auto_correction_enabled = self.coordinator.config_entry.options.get(CONF_ENABLE_AUTO_CORRECTION, False)
             if auto_correction_enabled and now_local.hour >= DAILY_OVERWRITE_HOUR and (self._last_daily_override_date is None or self._last_daily_override_date < today_local):
                 force_daily_overwrite, self._last_daily_override_date = True, today_local
-            current_hash = (len(raw_usage_list), raw_usage_list[0].get('startDate'), raw_usage_list[-1].get('startDate'))
+            
+            total_sum = round(sum(float(x.get('kw', 0)) for x in raw_usage_list if isinstance(x, dict)), 2)
+            current_hash = (len(raw_usage_list), raw_usage_list[0].get('startDate'), raw_usage_list[-1].get('startDate'), total_sum)
+            
             if self._processed_data_hash != current_hash or force_daily_overwrite:
                 if force_daily_overwrite: LOGGER.info(f"[{self._fuel_type}] Triggering scheduled daily statistic overwrite.")
-                else: LOGGER.info(f"[{self._fuel_type}] New data detected, triggering standard statistic append.")
+                else: LOGGER.info(f"[{self._fuel_type}] New data detected, triggering statistic processing.")
                 self.hass.async_create_task(self.async_process_statistics_data(list(raw_usage_list), force_overwrite=force_daily_overwrite))
                 self._processed_data_hash = current_hash
         self.async_write_ha_state()
@@ -229,7 +237,6 @@ class GenesisEnergyStatisticsSensor(CoordinatorEntity[GenesisEnergyDataUpdateCoo
             except (KeyError, ValueError, TypeError, IndexError):
                 first_entry_dt = dt_util.utcnow()
 
-            # Query baseline history up to the first entry in this batch to prevent 12:00 AM sum jumps
             prev_stats = await get_instance(self.hass).async_add_executor_job(
                 statistics_during_period,
                 self.hass,
@@ -245,14 +252,14 @@ class GenesisEnergyStatisticsSensor(CoordinatorEntity[GenesisEnergyDataUpdateCoo
                 last_stat = prev_stats[statistic_id][-1]
                 running_sum = float(last_stat.get('sum', 0.0))
                 last_ts = int(last_stat.get('start', 0))
+                LOGGER.debug(f"[{self._fuel_type}] Found existing baseline sum: {running_sum:.2f} at timestamp {last_ts}")
             else:
                 LOGGER.debug(f"[{self._fuel_type}] No prior baseline statistics found. Starting cumulative sum at 0.0")
 
             stats_to_add = []
             for entry in sorted_usage_data:
                 try:
-                    raw_val = float(entry[value_key])
-                    val = max(0.0, raw_val) if unit in ["kWh", "m³"] else raw_val
+                    val = float(entry[value_key])
                     start_dt_utc = datetime.fromisoformat(entry['startDate']).astimezone(self._utc_tz)
                     start_ts = int(start_dt_utc.timestamp())
                 except (KeyError, ValueError, TypeError):
@@ -574,7 +581,6 @@ class PowerShoutBalanceSensor(CoordinatorEntity[GenesisEnergyDataUpdateCoordinat
                 u = sorted([x for x in b_list if isinstance(x, dict) and x.get("startDateTime") and datetime.fromisoformat(x["startDateTime"]).replace(tzinfo=timezone.utc) > dt_util.utcnow()], key=lambda x: x["startDateTime"])
                 if u: attrs["next_booking_start"] = u[0]["startDateTime"]
 
-        # Top Recommended Past Hours (New Genesis Feature)
         if rec := self.coordinator.data.get(DATA_API_POWERSHOUT_RECOMMENDED_HOURS):
             if isinstance(rec, dict):
                 rec_list = rec.get("recommendedHours", [])

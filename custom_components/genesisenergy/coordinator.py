@@ -15,7 +15,7 @@ from homeassistant.util import dt as dt_util
 from .api import GenesisEnergyApi
 from .exceptions import CannotConnect, InvalidAuth, ApiError
 from .const import (
-    DOMAIN, LOGGER, DEFAULT_SCAN_INTERVAL_HOURS, CONF_EMAIL, CONF_PASSWORD,
+    DOMAIN, LOGGER, DEFAULT_SCAN_INTERVAL_HOURS, CONF_EMAIL, CONF_PASSWORD, CONF_REFRESH_TOKEN,
     DEVICE_MANUFACTURER, DEVICE_MODEL, DATA_API_ELECTRICITY_USAGE, DATA_API_GAS_USAGE,
     DATA_API_POWERSHOUT_INFO, DATA_API_POWERSHOUT_BALANCE, DATA_API_POWERSHOUT_BOOKINGS,
     DATA_API_POWERSHOUT_OFFERS, DATA_API_POWERSHOUT_EXPIRING, DATA_API_POWERSHOUT_RECOMMENDED_HOURS,
@@ -37,7 +37,22 @@ class GenesisEnergyDataUpdateCoordinator(DataUpdateCoordinator[dict[str, any]]):
 
     def __init__(self, hass: HomeAssistant, entry: ConfigEntry) -> None:
         self.config_entry = entry
-        self.api = GenesisEnergyApi(email=entry.data[CONF_EMAIL], password=entry.data[CONF_PASSWORD])
+        self._current_options = dict(entry.options)
+
+        def _on_token_updated(new_refresh_token: str):
+            """Persist rotated 90-day refresh token quietly without triggering a reload."""
+            new_data = dict(self.config_entry.data)
+            new_data[CONF_REFRESH_TOKEN] = new_refresh_token
+            self.hass.config_entries.async_update_entry(self.config_entry, data=new_data)
+            LOGGER.debug("Persisted newly rotated 90-day refresh token into config entry.")
+
+        self.api = GenesisEnergyApi(
+            email=entry.data[CONF_EMAIL],
+            password=entry.data[CONF_PASSWORD],
+            refresh_token=entry.data.get(CONF_REFRESH_TOKEN),
+            token_update_callback=_on_token_updated
+        )
+        
         device_name = self.config_entry.title
         self.device_info = DeviceInfo(
             identifiers={(DOMAIN, self.config_entry.entry_id)},
@@ -96,57 +111,59 @@ class GenesisEnergyDataUpdateCoordinator(DataUpdateCoordinator[dict[str, any]]):
         days_for_regular_fetch = 4
         semaphore = asyncio.Semaphore(8)
 
-        async def _bounded_call(coro):
+        async def _fetch_task(key, coro_fn, *args, **kwargs):
             async with semaphore:
-                return await coro
+                try:
+                    return key, await coro_fn(*args, **kwargs)
+                except Exception as err:
+                    LOGGER.debug("Could not fetch data for %s: %s", key, err)
+                    return key, None
 
-        api_calls = {}
+        tasks = []
 
         # 1. Base Core & Plan Calls
-        api_calls[DATA_API_BILLING_PLANS] = self.api.get_billing_plans()
-        api_calls[DATA_API_WIDGET_BILLS_V2] = self.api.get_widget_bill_summary_v2()
-        api_calls[DATA_API_GENERATION_MIX_REALTIME] = self.api.get_generation_mix_realtime()
-        api_calls[DATA_API_WIDGET_HERO] = self.api.get_widget_hero_info()
-        api_calls[DATA_API_WIDGET_PROPERTY_LIST] = self.api.get_widget_property_list()
-        api_calls[DATA_API_WIDGET_PROPERTY_SWITCHER] = self.api.get_widget_property_switcher()
+        tasks.append(_fetch_task(DATA_API_BILLING_PLANS, self.api.get_billing_plans))
+        tasks.append(_fetch_task(DATA_API_WIDGET_BILLS_V2, self.api.get_widget_bill_summary_v2))
+        tasks.append(_fetch_task(DATA_API_GENERATION_MIX_REALTIME, self.api.get_generation_mix_realtime))
+        tasks.append(_fetch_task(DATA_API_WIDGET_HERO, self.api.get_widget_hero_info))
+        tasks.append(_fetch_task(DATA_API_WIDGET_PROPERTY_LIST, self.api.get_widget_property_list))
+        tasks.append(_fetch_task(DATA_API_WIDGET_PROPERTY_SWITCHER, self.api.get_widget_property_switcher))
 
         # 2. Electricity Calls
         if self.has_electricity or not self._services_detected:
-            api_calls[DATA_API_ELECTRICITY_USAGE] = self.api.get_energy_data(days_for_regular_fetch)
-            api_calls[DATA_API_ELECTRICITY_FORECAST] = self.api.get_electricity_forecast()
+            tasks.append(_fetch_task(DATA_API_ELECTRICITY_USAGE, self.api.get_energy_data, days_for_regular_fetch))
+            tasks.append(_fetch_task(DATA_API_ELECTRICITY_FORECAST, self.api.get_electricity_forecast))
 
         # 3. EV Plan Calls
         if self.has_ev_plan or not self._services_detected:
-            api_calls[DATA_API_EV_PLAN_USAGE] = self.api.get_ev_plan_usage()
+            tasks.append(_fetch_task(DATA_API_EV_PLAN_USAGE, self.api.get_ev_plan_usage))
 
         # 4. Natural Gas Calls
         if self.has_gas or not self._services_detected:
-            api_calls[DATA_API_GAS_USAGE] = self.api.get_gas_data(days_for_regular_fetch)
+            tasks.append(_fetch_task(DATA_API_GAS_USAGE, self.api.get_gas_data, days_for_regular_fetch))
 
         # 5. Power Shout Calls
         if self.has_powershout or not self._services_detected:
-            api_calls[DATA_API_POWERSHOUT_INFO] = self.api.get_powershout_info()
-            api_calls[DATA_API_POWERSHOUT_BALANCE] = self.api.get_powershout_balance()
-            api_calls[DATA_API_POWERSHOUT_OFFERS] = self.api.get_powershout_offers()
-            api_calls[DATA_API_POWERSHOUT_EXPIRING] = self.api.get_powershout_expiring_hours()
-            api_calls[DATA_API_POWERSHOUT_BOOKINGS] = self.api.get_powershout_bookings()
-            api_calls[DATA_API_WIDGET_DASHBOARD_POWERSHOUT] = self.api.get_widget_dashboard_powershout()
+            tasks.append(_fetch_task(DATA_API_POWERSHOUT_INFO, self.api.get_powershout_info))
+            tasks.append(_fetch_task(DATA_API_POWERSHOUT_BALANCE, self.api.get_powershout_balance))
+            tasks.append(_fetch_task(DATA_API_POWERSHOUT_OFFERS, self.api.get_powershout_offers))
+            tasks.append(_fetch_task(DATA_API_POWERSHOUT_EXPIRING, self.api.get_powershout_expiring_hours))
+            tasks.append(_fetch_task(DATA_API_POWERSHOUT_BOOKINGS, self.api.get_powershout_bookings))
+            tasks.append(_fetch_task(DATA_API_WIDGET_DASHBOARD_POWERSHOUT, self.api.get_widget_dashboard_powershout))
 
-        tasks = [asyncio.create_task(_bounded_call(coro)) for coro in api_calls.values()]
         results = await asyncio.gather(*tasks, return_exceptions=True)
 
         fetched_data = dict(self.data or {})
 
-        for key, result in zip(api_calls.keys(), results):
-            if isinstance(result, Exception):
-                LOGGER.debug("Could not fetch data for %s: %s", key, result)
-            else:
-                fetched_data[key] = result
+        for result in results:
+            if isinstance(result, tuple) and len(result) == 2:
+                key, val = result
+                if val is not None:
+                    fetched_data[key] = val
 
         if DATA_API_BILLING_PLANS in fetched_data:
             self._detect_account_services(fetched_data.get(DATA_API_BILLING_PLANS))
 
-        # Backward compatibility for sidekick sensors
         bill_v2 = fetched_data.get(DATA_API_WIDGET_BILLS_V2)
         if bill_v2 and isinstance(bill_v2, dict) and bill_v2.get("billEstimated"):
             fetched_data[DATA_API_WIDGET_SIDEKICK] = bill_v2.get("billEstimated")
@@ -277,11 +294,9 @@ class GenesisEnergyDataUpdateCoordinator(DataUpdateCoordinator[dict[str, any]]):
                         existing_dates.add(stat_date)
                 dates_to_fetch = sorted(list(all_desired_dates - existing_dates))
 
-            # Exclude today
             if today in dates_to_fetch:
                 dates_to_fetch.remove(today)
 
-            # If running before 1:00 PM (13:00), also exclude yesterday as Genesis data is not yet finalized
             yesterday = today - timedelta(days=1)
             if dt_util.now().hour < DAILY_OVERWRITE_HOUR and yesterday in dates_to_fetch:
                 LOGGER.debug("[%s] Removing yesterday (%s) from backfill list — data not finalized until after 1:00 PM.", fuel_name, yesterday)
