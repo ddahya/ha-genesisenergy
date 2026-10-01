@@ -2,7 +2,6 @@
 
 from logging import Logger, getLogger
 from typing import Final
-from homeassistant.helpers.entity import EntityCategory
 from .model import GenesisEnergyBinarySensorEntityDescription
 
 LOGGER: Logger = getLogger(__package__)
@@ -14,9 +13,11 @@ PLATFORMS: Final = ["sensor", "binary_sensor"]
 # --- Configuration ---
 CONF_EMAIL: Final = "email"
 CONF_PASSWORD: Final = "password"
+CONF_REFRESH_TOKEN: Final = "refresh_token"
+CONF_VERIFICATION_CODE: Final = "verification_code"
 DEFAULT_SCAN_INTERVAL_HOURS: Final = 1
-CONF_ENABLE_AUTO_CORRECTION = "enable_auto_correction"
-DAILY_OVERWRITE_HOUR = 13
+CONF_ENABLE_AUTO_CORRECTION: Final = "enable_auto_correction"
+DAILY_OVERWRITE_HOUR: Final = 13
 
 # --- API Data Keys for Coordinator ---
 DATA_API_ELECTRICITY_USAGE: Final = "api_electricity_usage"
@@ -27,9 +28,11 @@ DATA_API_POWERSHOUT_BALANCE: Final = "api_powershout_balance"
 DATA_API_POWERSHOUT_BOOKINGS: Final = "api_powershout_bookings"
 DATA_API_POWERSHOUT_OFFERS: Final = "api_powershout_offers"
 DATA_API_POWERSHOUT_EXPIRING: Final = "api_powershout_expiring"
+DATA_API_POWERSHOUT_RECOMMENDED_HOURS: Final = "api_powershout_recommended_hours"
 DATA_API_BILLING_PLANS: Final = "api_billing_plans"
 DATA_API_WIDGET_HERO: Final = "api_widget_hero"
 DATA_API_WIDGET_BILLS: Final = "api_widget_bill_summary"
+DATA_API_WIDGET_BILLS_V2: Final = "api_widget_bill_summary_v2"
 DATA_API_AGGREGATED_ELEC_BILL: Final = "api_aggregated_elec_bill"
 DATA_API_WIDGET_PROPERTY_LIST: Final = "api_widget_property_list"
 DATA_API_WIDGET_PROPERTY_SWITCHER: Final = "api_widget_property_switcher"
@@ -40,13 +43,13 @@ DATA_API_WIDGET_DASHBOARD_LIST: Final = "api_widget_dashboard_list"
 DATA_API_WIDGET_ACTION_TILE_LIST: Final = "api_widget_action_tile_list"
 DATA_API_NEXT_BEST_ACTION: Final = "api_next_best_action"
 DATA_API_GENERATION_MIX: Final = "api_generation_mix"
+DATA_API_GENERATION_MIX_REALTIME: Final = "api_generation_mix_realtime"
 DATA_API_ELECTRICITY_FORECAST: Final = "api_electricity_forecast"
 DATA_API_USAGE_BREAKDOWN: Final = "api_usage_breakdown"
 DATA_API_LPG_ORDER_STATUS: Final = "api_lpg_order_status"
 DATA_API_LPG_DELIVERY_HISTORY: Final = "api_lpg_delivery_history"
 DATA_API_LPG_DELIVERY_SUMMARY: Final = "api_lpg_delivery_summary"
-DATA_API_LPG_DETAILS = "api_lpg_details"
-SENSOR_KEY_LPG_DETAILS = "lpg_details"
+DATA_API_LPG_DETAILS: Final = "api_lpg_details"
 
 # --- Statistic IDs for Energy Dashboard ---
 STATISTIC_ID_ELECTRICITY_CONSUMPTION: Final = f"{DOMAIN}:electricity_consumption_daily"
@@ -62,7 +65,7 @@ SENSOR_KEY_GENERATION_MIX: Final = "generation_mix"
 SENSOR_KEY_POWERSHOUT_OFFER_AVAILABLE: Final = "powershout_offer_available"
 SENSOR_KEY_LPG_DETAILS: Final = "lpg_details"
 
-# --- New LPG Sensor Keys ---
+# --- LPG Sensor Keys ---
 SENSOR_KEY_LPG_ORDER_STATUS: Final = "lpg_order_status"
 SENSOR_KEY_LPG_DELIVERY_HISTORY: Final = "lpg_delivery_history"
 SENSOR_KEY_LPG_DELIVERY_SUMMARY: Final = "lpg_delivery_summary"
