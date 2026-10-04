@@ -1,19 +1,19 @@
-# This is the services.yaml file for the genesisenergy integration.
+# custom_components/genesisenergy/services.yaml
 
 add_powershout_booking:
   name: Add Power Shout Booking
-  description: "Books a Genesis Energy Power Shout for your electricity account."
+  description: "Books a Genesis Energy Power Shout for your electricity account (future or past 31 days)."
   fields:
     start_datetime:
       name: Start Datetime
-      description: "The date and time (in your Home Assistant's local timezone) for the Power Shout to begin."
+      description: "The date and time for the Power Shout to begin."
       required: true
-      example: "2025-06-15 18:00:00"
+      example: "2026-10-02 18:00:00"
       selector:
         datetime: {}
     duration_hours:
       name: Duration
-      description: "The duration of the Power Shout in hours (e.g., 1, 2, 3, or 4)."
+      description: "The duration of the Power Shout in hours (1-4)."
       required: true
       example: 1
       selector:
@@ -24,12 +24,33 @@ add_powershout_booking:
           mode: slider
           unit_of_measurement: "hr"
 
+cancel_powershout_booking:
+  name: Cancel Power Shout Booking
+  description: "Cancels an upcoming Power Shout booking."
+  fields:
+    booking_id:
+      name: Booking ID
+      description: "The unique ID of the booking to cancel."
+      required: true
+      example: "45f56a1fba641502ab8de46effdf933e"
+      selector:
+        text: {}
+
+accept_powershout_offer:
+  name: Accept Power Shout Offer
+  description: "Accepts an available Power Shout campaign offer."
+  fields:
+    offer_id:
+      name: Offer ID
+      description: "The unique GUID/ID of the Power Shout offer to accept."
+      required: true
+      example: "12345678-abcd-1234-abcd-1234567890ab"
+      selector:
+        text: {}
+
 backfill_statistics:
   name: Backfill Historical Statistics
-  description: >
-    Fetches a specified number of days of historical usage data to backfill the
-    long-term statistics. Useful for populating the Energy Dashboard with older data.
-    This can take several minutes to complete depending on the days requested.
+  description: "Fetches historical usage data to backfill long-term statistics for the Energy Dashboard."
   fields:
     days_to_fetch:
       name: Days to Fetch
@@ -39,14 +60,14 @@ backfill_statistics:
       selector:
         number:
           min: 1
-          max: 730 # ~2 years
+          max: 730
           step: 1
           mode: box
     fuel_type:
       name: Fuel Type
-      description: "Select which fuel type to backfill. 'both' will fetch for electricity and gas."
+      description: "Select which fuel type to backfill."
       required: true
-      example: "electricity"
+      example: "both"
       selector:
         select:
           options:
@@ -55,7 +76,7 @@ backfill_statistics:
             - "both"
     force_overwrite:
       name: Force Overwrite
-      description: "If enabled, ignores existing data and re-fetches the entire period. Use this to fix corrupted or missing days."
+      description: "If enabled, re-fetches and overwrites existing statistics."
       required: true  
       example: false
       selector:
@@ -63,12 +84,11 @@ backfill_statistics:
 
 force_update:
   name: Force Data Update
-  description: >
-    Triggers an immediate poll of the Genesis Energy API to fetch the latest data for all sensors.
+  description: "Triggers an immediate poll of the Genesis Energy API for all sensors."
   fields:
     fuel_type:
       name: Fuel Type
-      description: "Select which data to prioritize for refresh, or 'both' for a full refresh."
+      description: "Select which data to prioritize for refresh."
       required: true
       example: "both"
       selector:

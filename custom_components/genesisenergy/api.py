@@ -341,7 +341,25 @@ class GenesisEnergyApi:
         to_date = now_local.strftime("%Y-%m-%d")
         payload = {'startDate': from_date, 'endDate': to_date, 'intervalType': "HOURLY"}
         return await self._make_api_call("POST", "/v2/private/electricity/site-usage", json_payload=payload, description="electricity usage")
-        
+
+    async def delete_powershout_booking(
+        self,
+        booking_id: str,
+        billing_account_id: str,
+    ) -> Any:
+        """Cancels an upcoming Power Shout booking."""
+        payload = {
+            "bookingId": booking_id,
+            "billingAccountId": billing_account_id,
+        }
+        return await self._make_api_call(
+            "POST",
+            "/v2/private/powershoutcurrency/booking/delete",
+            json_payload=payload,
+            description="delete Power Shout booking",
+            expect_json=False,
+        )
+
     async def get_ev_plan_usage(self): return await self._make_api_call("GET", "/v2/private/evPlan/electricityUsage", description="EV plan usage")
     async def get_gas_data(self, days_to_fetch: int = 4):
         now_local = dt_util.now()
@@ -350,11 +368,11 @@ class GenesisEnergyApi:
         params = {'startDate': from_date, 'endDate': to_date, 'intervalType': "HOURLY"}
         return await self._make_api_call("GET", "/v2/private/naturalgas/advanced/usage", params=params, description="gas usage")
     async def get_electricity_forecast(self): return await self._make_api_call("GET", "/v2/private/electricityForecast", description="electricity forecast")
-    async def get_energy_data_for_period(self, start_date_str: str, end_date_str: str):
-        payload = {'startDate': start_date_str, 'endDate': end_date_str, 'intervalType': "HOURLY"}
+    async def get_energy_data_for_period(self, start_date_str: str, end_date_str: str, interval_type: str = "HOURLY"):
+        payload = {'startDate': start_date_str, 'endDate': end_date_str, 'intervalType': interval_type}
         return await self._make_api_call("POST", "/v2/private/electricity/site-usage", json_payload=payload, description=f"electricity usage for {start_date_str}-{end_date_str}")
-    async def get_gas_data_for_period(self, start_date_str: str, end_date_str: str):
-        params = {'startDate': start_date_str, 'endDate': end_date_str, 'intervalType': "HOURLY"}
+    async def get_gas_data_for_period(self, start_date_str: str, end_date_str: str, interval_type: str = "HOURLY"):
+        params = {'startDate': start_date_str, 'endDate': end_date_str, 'intervalType': interval_type}
         return await self._make_api_call("GET", "/v2/private/naturalgas/advanced/usage", params=params, description=f"gas usage for {start_date_str}-{end_date_str}")
 
     async def get_powershout_info(self): return await self._make_api_call("GET", "/v2/private/powershoutcurrency/eligible/accounts", description="Power Shout eligible accounts info")

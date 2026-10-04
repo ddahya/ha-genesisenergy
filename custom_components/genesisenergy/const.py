@@ -100,10 +100,12 @@ DEVICE_MODEL: Final = "Online Account"
 
 # --- Service Related Constants ---
 SERVICE_ADD_POWERSHOUT_BOOKING: Final = "add_powershout_booking"
+SERVICE_CANCEL_POWERSHOUT_BOOKING: Final = "cancel_powershout_booking"
 SERVICE_ACCEPT_POWERSHOUT_OFFER: Final = "accept_powershout_offer"
 ATTR_START_DATETIME: Final = "start_datetime"
 ATTR_DURATION_HOURS: Final = "duration_hours"
 ATTR_OFFER_ID: Final = "offer_id"
+ATTR_BOOKING_ID: Final = "booking_id"
 
 SERVICE_BACKFILL_STATISTICS: Final = "backfill_statistics"
 ATTR_DAYS_TO_FETCH: Final = "days_to_fetch"

@@ -38,6 +38,8 @@ class GenesisEnergyDataUpdateCoordinator(DataUpdateCoordinator[dict[str, any]]):
     def __init__(self, hass: HomeAssistant, entry: ConfigEntry) -> None:
         self.config_entry = entry
         self._current_options = dict(entry.options)
+        self.usage_cache: dict[str, any] = {}
+        self._prefetched: bool = False
 
         def _on_token_updated(new_refresh_token: str):
             """Persist rotated 90-day refresh token quietly without triggering a reload."""
@@ -74,11 +76,54 @@ class GenesisEnergyDataUpdateCoordinator(DataUpdateCoordinator[dict[str, any]]):
     
     async def _async_update_data(self) -> dict[str, any]:
         try:
-            return await self._async_fetch_all_data()
+            data = await self._async_fetch_all_data()
+            if not self._prefetched:
+                self.hass.async_create_task(self.async_prefetch_current_year_usage())
+                self._prefetched = True
+            return data
         except (InvalidAuth, CannotConnect, ApiError) as err:
             raise UpdateFailed(f"Error communicating with API: {err}") from err
         except Exception as err:
             raise UpdateFailed(f"Unexpected error updating data: {err}") from err
+
+    async def async_prefetch_current_year_usage(self) -> None:
+        """Background task to pre-fetch current year monthly & current month daily data for instant card display."""
+        now = dt_util.now()
+        year = now.year
+        month = now.month
+        
+        # 1. Current Year Monthly bounds
+        m_start = f"{year}-01-01"
+        m_end = f"{year}-12-31"
+
+        # 2. Current Month Daily bounds (clamped to today)
+        d_start = f"{year}-{month:02d}-01"
+        d_end = now.strftime("%Y-%m-%d")
+
+        LOGGER.debug("Starting background pre-fetch of current year usage data...")
+        await asyncio.sleep(2)  # Yield to allow startup to finish smoothly
+
+        tasks = [
+            ("elec_monthly", self.api.get_energy_data_for_period, m_start, m_end, "MONTHLY"),
+            ("elec_daily", self.api.get_energy_data_for_period, d_start, d_end, "DAILY"),
+        ]
+
+        if self.has_gas:
+            tasks.append(("gas_monthly", self.api.get_gas_data_for_period, m_start, m_end, "MONTHLY"))
+            tasks.append(("gas_daily", self.api.get_gas_data_for_period, d_start, d_end, "DAILY"))
+
+        for key, coro, *args in tasks:
+            try:
+                res = await coro(*args)
+                if res and isinstance(res, dict) and "usage" in res:
+                    fuel = "gas" if "gas" in key else "electricity"
+                    gran = "MONTHLY" if "monthly" in key else "DAILY"
+                    cache_key = f"{fuel}_{gran}_{args[0]}_{args[1]}"
+                    self.usage_cache[cache_key] = res.get("usage", [])
+                    LOGGER.debug("Pre-fetched and cached %s data (%d items)", key, len(res.get("usage", [])))
+                await asyncio.sleep(0.4)  # Prevent burst rate limits
+            except Exception as e:
+                LOGGER.debug("Background pre-fetch skipped for %s: %s", key, e)
 
     def _detect_account_services(self, plans_data: dict | None) -> None:
         """Inspect billing plans to set active service channels."""

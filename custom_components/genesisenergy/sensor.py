@@ -408,6 +408,24 @@ class ForecastSensor(CoordinatorEntity[GenesisEnergyDataUpdateCoordinator], Sens
             return f["Forecast"][0]
         return None
 
+    @property
+    def extra_state_attributes(self) -> Mapping[str, Any] | None:
+        t = self._today_forecast_data
+        if not t or not isinstance(t, dict): return None
+        attrs = {
+            "prediction_low_kwh": t.get("PredictionLowInkWh") or t.get("predictionLowInkWh") or t.get("predictionLowKwh"),
+            "prediction_high_kwh": t.get("PredictionHighInkWh") or t.get("predictionHighInkWh") or t.get("predictionHighKwh"),
+            "prediction_low_cost": t.get("PredictionLowCost") or t.get("predictionLowCost"),
+            "prediction_high_cost": t.get("PredictionHighCost") or t.get("predictionHighCost"),
+        }
+        f = self.coordinator.data.get(DATA_API_ELECTRICITY_FORECAST)
+        if f and isinstance(f, dict):
+            if "IcpForecasts" in f and f["IcpForecasts"] and isinstance(f["IcpForecasts"], list):
+                attrs["daily_forecast"] = f["IcpForecasts"][0].get("Forecast")
+            elif "Forecast" in f:
+                attrs["daily_forecast"] = f.get("Forecast")
+        return attrs
+
 class ForecastUsageSensor(ForecastSensor):
     _attr_native_unit_of_measurement, _attr_state_class, _attr_icon = "kWh", SensorStateClass.MEASUREMENT, "mdi:chart-line"
     def __init__(self, coordinator): super().__init__(coordinator, SensorEntityDescription(key=SENSOR_KEY_FORECAST_USAGE, name="Today's Forecast Usage"))
@@ -566,15 +584,34 @@ class PowerShoutBalanceSensor(CoordinatorEntity[GenesisEnergyDataUpdateCoordinat
         if o := self.coordinator.data.get(DATA_API_POWERSHOUT_OFFERS):
             if isinstance(o, dict):
                 attrs["active_offers_count"], attrs["active_offers"] = len(o.get("activeOffers", [])), o.get("activeOffers", [])
+        # if e := self.coordinator.data.get(DATA_API_POWERSHOUT_EXPIRING):
+        #     if isinstance(e, dict):
+        #         if m := e.get("expiringHoursMessage"): 
+        #             t_title = m.get("title"); substrings = m.get("titleSubstrings")
+        #             if t_title and substrings:
+        #                 attrs["expiring_hours_message"] = t_title.replace("{{0}}", substrings[0].get("text", ""))
+        #             elif t_title: attrs["expiring_hours_message"] = t_title
+        #         if t_tip := e.get("messageTooltip"):
+        #             if isinstance(t_tip, dict): attrs["expiring_hours_tooltip"] = t_tip.get("description")
         if e := self.coordinator.data.get(DATA_API_POWERSHOUT_EXPIRING):
             if isinstance(e, dict):
                 if m := e.get("expiringHoursMessage"): 
-                    t_title = m.get("title"); substrings = m.get("titleSubstrings")
-                    if t_title and substrings:
-                        attrs["expiring_hours_message"] = t_title.replace("{{0}}", substrings[0].get("text", ""))
-                    elif t_title: attrs["expiring_hours_message"] = t_title
+                    t_title = str(m.get("title", "")).strip()
+                    substrings = m.get("titleSubstrings") or []
+                    for idx, sub in enumerate(substrings):
+                        if isinstance(sub, dict):
+                            t_title = t_title.replace(f"{{{{{idx}}}}}", str(sub.get("text", "")))
+                        elif isinstance(sub, str):
+                            t_title = t_title.replace(f"{{{{{idx}}}}}", str(sub))
+                    if t_title:  # Only populate if Genesis provided a real message
+                        attrs["expiring_hours_message"] = t_title
                 if t_tip := e.get("messageTooltip"):
-                    if isinstance(t_tip, dict): attrs["expiring_hours_tooltip"] = t_tip.get("description")
+                    desc = t_tip.get("description") if isinstance(t_tip, dict) else str(t_tip)
+                    if desc and desc.strip():
+                        attrs["expiring_hours_tooltip"] = desc.strip()
+                if exp_list := e.get("expiringHours"):
+                    attrs["expiring_hours_list"] = exp_list
+
         if b_data := self.coordinator.data.get(DATA_API_POWERSHOUT_BOOKINGS):
             if isinstance(b_data, dict):
                 b_list = b_data.get("bookings", []); attrs["bookings"] = b_list
