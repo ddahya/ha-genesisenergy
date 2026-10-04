@@ -584,15 +584,6 @@ class PowerShoutBalanceSensor(CoordinatorEntity[GenesisEnergyDataUpdateCoordinat
         if o := self.coordinator.data.get(DATA_API_POWERSHOUT_OFFERS):
             if isinstance(o, dict):
                 attrs["active_offers_count"], attrs["active_offers"] = len(o.get("activeOffers", [])), o.get("activeOffers", [])
-        # if e := self.coordinator.data.get(DATA_API_POWERSHOUT_EXPIRING):
-        #     if isinstance(e, dict):
-        #         if m := e.get("expiringHoursMessage"): 
-        #             t_title = m.get("title"); substrings = m.get("titleSubstrings")
-        #             if t_title and substrings:
-        #                 attrs["expiring_hours_message"] = t_title.replace("{{0}}", substrings[0].get("text", ""))
-        #             elif t_title: attrs["expiring_hours_message"] = t_title
-        #         if t_tip := e.get("messageTooltip"):
-        #             if isinstance(t_tip, dict): attrs["expiring_hours_tooltip"] = t_tip.get("description")
         if e := self.coordinator.data.get(DATA_API_POWERSHOUT_EXPIRING):
             if isinstance(e, dict):
                 if m := e.get("expiringHoursMessage"): 
