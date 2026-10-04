@@ -1,7 +1,7 @@
 // custom_components/genesisenergy/www/powershout-card.js
-// Genesis Energy — Power Shout & Account Custom Lovelace Card (v2.26.0 with Interactive Test Mode)
+// Genesis Energy — Power Shout & Account Custom Lovelace Card (v1.0.0)
 
-const CARD_VERSION = "2.26.0";
+const CARD_VERSION = "1.0.0";
 const DOMAIN = "genesisenergy";
 
 const TAB_SHOUT = "shout";
