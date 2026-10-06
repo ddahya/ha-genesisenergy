@@ -12,7 +12,7 @@
   "iot_class": "cloud_polling",
   "issue_tracker": "https://github.com/ddahya/ha-genesisenergy/issues",
   "requirements": ["pytz"],
-  "version": "2.0.0.b1",
+  "version": "2.0.0.b2",
   "platforms": [
     "sensor",
     "binary_sensor"
