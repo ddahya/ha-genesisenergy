@@ -1,14 +1,20 @@
 // custom_components/genesisenergy/www/powershout-card.js
-// Genesis Energy — Power Shout & Account Custom Lovelace Card (v1.0.0)
+// Genesis Energy — Power Shout & Account Custom Lovelace Card (v2.0.1)
 
-const CARD_VERSION = "1.0.0";
+const CARD_VERSION = "2.0.1";
 const DOMAIN = "genesisenergy";
+
+// Number of previous/adjacent months to fetch in one batch for the daily chart
+const DAILY_FETCH_PREV_MONTHS = 3;
 
 const TAB_SHOUT = "shout";
 const TAB_USAGE = "usage";
 const TAB_PAST = "past";
 const TAB_FORECAST = "forecast";
 const TAB_SUMMARY = "summary";
+
+const LOGO_SVG_URL = new URL("./powershout.svg", import.meta.url).href;
+const LOGO_PNG_URL = new URL("./powershout.png", import.meta.url).href;
 
 function parseData(val) {
   if (!val) return null;
@@ -34,6 +40,12 @@ function fmtHour(isoStr) {
 function fmtNum(val, decimals = 2) {
   const n = parseFloat(val);
   return isNaN(n) ? null : n.toFixed(decimals);
+}
+
+function fmtDate(isoStr) {
+  if (!isoStr) return null;
+  const d = new Date(isoStr);
+  return isNaN(d) ? null : d.toLocaleDateString([], { day: "numeric", month: "short" });
 }
 
 function fmtPastHour(isoStr) {
@@ -111,12 +123,11 @@ function endHourLabel(startDatetime, duration) {
   return end.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" }).toLowerCase();
 }
 
-// Miniature Power Shout Pin for Legends and Tooltips
 const PS_PIN_SVG = `
   <svg width="13" height="16" viewBox="0 0 16 20" fill="none" style="vertical-align:-2px;flex-shrink:0;">
     <circle cx="8" cy="8" r="8" fill="var(--genesis-orange)"/>
     <path d="M 5 13 L 8 19 L 11 13 Z" fill="var(--genesis-orange)"/>
-    <text x="8" y="11.2" text-anchor="middle" fill="#ffffff" font-size="9" font-weight="900" font-family="-apple-system, BlinkMacSystemFont, sans-serif">P</text>
+    <text x="8" y="11.2" text-anchor="middle" fill="#ffffff" font-size="9" font-weight="900" font-family="-apple-system, sans-serif">P</text>
   </svg>
 `;
 
@@ -155,7 +166,6 @@ const CARD_CSS = `
     padding: 16px;
   }
 
-  /* ── Hero Header ── */
   .hero {
     align-items: center;
     display: flex;
@@ -227,11 +237,8 @@ const CARD_CSS = `
   }
 
   .elig {
-    background: rgba(76, 175, 80, 0.18);
-    border: 1px solid rgba(76, 175, 80, 0.45);
     border-radius: 999px;
-    color: #4caf50;
-    font-size: 10.5px;
+    font-size: 11px;
     font-weight: 800;
     letter-spacing: .04em;
     padding: 4px 10px;
@@ -239,8 +246,22 @@ const CARD_CSS = `
     white-space: nowrap;
     flex-shrink: 0;
   }
+  .elig.ok {
+    background: rgba(76, 175, 80, 0.18);
+    border: 1px solid rgba(76, 175, 80, 0.45);
+    color: #4caf50;
+  }
+  .elig.bad {
+    background: rgba(244, 67, 54, 0.18);
+    border: 1px solid rgba(244, 67, 54, 0.45);
+    color: #ff5252;
+  }
+  .elig.warn {
+    background: rgba(241, 91, 41, 0.18);
+    border: 1px solid rgba(241, 91, 41, 0.45);
+    color: var(--genesis-orange);
+  }
 
-  /* ── Top Billing Summary Card ── */
   .sum-card {
     background: var(--genesis-surface);
     border: 1px solid var(--genesis-border);
@@ -298,7 +319,6 @@ const CARD_CSS = `
     transition: width 0.4s ease;
   }
 
-  /* ── Status Banners (Live & Offers) ── */
   .live {
     align-items: center;
     background: var(--genesis-orange);
@@ -386,13 +406,13 @@ const CARD_CSS = `
     font-weight: 800;
   }
 
-  /* ── Tabs Bar ── */
   .tabs {
     border-bottom: 1px solid var(--genesis-border);
     display: flex;
+    align-items: center;
     gap: 2px;
     margin: 14px -16px 0;
-    padding: 0 10px;
+    padding: 0 12px;
     overflow-x: auto;
     scrollbar-width: none;
   }
@@ -430,30 +450,87 @@ const CARD_CSS = `
     line-height: 1;
     padding: 2px 6px;
   }
+
+  .main-sync-badge {
+    margin-left: auto;
+    font-size: 11.5px;
+    font-weight: 600;
+    color: var(--genesis-muted);
+    letter-spacing: .01em;
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    white-space: nowrap;
+    padding-left: 6px;
+    flex-shrink: 0;
+  }
+  .main-sync-badge strong {
+    color: var(--genesis-text);
+    font-weight: 700;
+  }
+  .usage-sync-dot {
+    height: 7px;
+    width: 7px;
+    border-radius: 50%;
+    background: #4caf50;
+    display: inline-block;
+    flex-shrink: 0;
+  }
+  .usage-sync-dot.lagging {
+    background: var(--genesis-yellow);
+  }
+  .usage-sync-dot.stalled {
+    background: #ff5252;
+  }
+  @media (max-width: 440px) {
+    .main-sync-badge .sync-text-prefix { display: none; }
+  }
+
   .panel { padding-top: 4px; }
 
-  /* ── Recent Usage Graph ── */
-  .usage-header-row {
-    display: flex;
-    justify-content: flex-start;
-    align-items: center;
-    margin-top: 8px;
-    padding-bottom: 6px;
-    border-bottom: 1px solid var(--genesis-border);
+  .detailed-usage-card {
+    background: var(--genesis-surface);
+    border: 1px solid var(--genesis-border);
+    border-radius: 16px;
+    padding: 14px;
+    margin-top: 10px;
+    position: relative;
   }
-  .usage-title {
-    color: var(--genesis-plum);
-    font-size: 15px;
-    font-weight: 900;
-    letter-spacing: .06em;
-    text-transform: uppercase;
+  .service-subtabs {
+    display: flex;
+    gap: 8px;
+    border-bottom: 1.5px solid var(--genesis-border);
+    padding-bottom: 4px;
+    margin-bottom: 12px;
+    overflow-x: auto;
+    scrollbar-width: none;
+  }
+  .service-subtabs::-webkit-scrollbar { display: none; }
+  .service-subtabs button {
+    appearance: none;
+    background: none;
+    border: 0;
+    border-bottom: 3px solid transparent;
+    color: var(--genesis-muted);
+    cursor: pointer;
+    font: inherit;
+    font-size: 13.5px;
+    font-weight: 700;
+    padding: 6px 10px;
+    margin-bottom: -5.5px;
+    white-space: nowrap;
+    transition: all .2s;
+  }
+  .service-subtabs button.sel {
+    border-bottom-color: var(--genesis-orange);
+    color: var(--genesis-text);
   }
 
   .usage-metrics-row {
     display: flex;
     justify-content: space-between;
     align-items: baseline;
-    margin: 12px 2px 4px;
+    margin: 4px 2px 4px;
   }
   .usage-metric-box {
     display: flex;
@@ -468,174 +545,7 @@ const CARD_CSS = `
     font-weight: 700;
     color: var(--genesis-muted);
     letter-spacing: .02em;
-    margin-bottom: 10px;
-  }
-
-  .chart-container {
-    width: 100%;
-    margin-top: 8px;
-    position: relative;
-    user-select: none;
-  }
-  .chart-svg {
-    width: 100%;
-    height: 195px;
-    overflow: visible;
-  }
-  .chart-grid-line {
-    stroke: var(--genesis-border);
-    stroke-dasharray: 4, 4;
-    stroke-width: 1;
-  }
-  .chart-axis-text {
-    fill: var(--genesis-muted);
-    font-size: 11px;
-    font-weight: 600;
-  }
-  .chart-timeline-track {
-    background: var(--genesis-border);
-    border-radius: 4px;
-    height: 6px;
-    margin: 6px 0 14px 34px;
-    overflow: hidden;
-  }
-  .chart-timeline-fill {
-    background: var(--genesis-track);
-    height: 100%;
-    border-radius: 4px;
-  }
-
-  /* ── Opposite-Side Non-Obstructing Tooltip ── */
-  .chart-tooltip {
-    position: absolute;
-    background: rgba(226, 213, 236, 0.94);
-    color: #4a0d46;
-    backdrop-filter: blur(8px);
-    -webkit-backdrop-filter: blur(8px);
-    border: 1px solid rgba(74, 13, 70, 0.22);
-    border-radius: 10px;
-    padding: 8px 12px;
-    box-shadow: 0 10px 30px rgba(0,0,0,0.32);
-    pointer-events: none;
-    z-index: 150;
-    min-width: 155px;
-    max-width: 215px;
-    opacity: 0;
-    transform: translateY(4px);
-    transition: opacity .15s ease, transform .15s ease;
-  }
-  .chart-tooltip.visible {
-    opacity: 1;
-    transform: translateY(0);
-  }
-  :host(.theme-dark) .chart-tooltip {
-    background: rgba(38, 22, 42, 0.93);
-    color: #f3e5f5;
-    border-color: rgba(186, 104, 200, 0.38);
-    box-shadow: 0 12px 34px rgba(0,0,0,0.65);
-  }
-
-  .tip-date-row {
-    display: flex;
-    justify-content: space-between;
-    align-items: baseline;
-    font-size: 12.5px;
-    font-weight: 800;
-    color: #4a0d46;
-    margin-bottom: 5px;
-    gap: 8px;
-    white-space: nowrap;
-  }
-  :host(.theme-dark) .tip-date-row { color: #e1bee7; }
-
-  .tip-kwh { font-size: 12px; font-weight: 800; color: #5d1757; }
-  :host(.theme-dark) .tip-kwh { color: #ce93d8; }
-
-  .tip-row {
-    display: flex;
-    justify-content: space-between;
-    font-size: 12px;
-    font-weight: 600;
-    color: #4a0d46;
-    margin: 2px 0;
-  }
-  :host(.theme-dark) .tip-row { color: #ede7f6; }
-
-  .tip-divider {
-    border-top: 1px solid rgba(74, 13, 70, 0.22);
-    margin: 5px 0;
-  }
-  :host(.theme-dark) .tip-divider { border-top-color: rgba(186, 104, 200, 0.25); }
-
-  .tip-row.total { font-weight: 800; font-size: 12.5px; }
-
-  .tip-ps-badge {
-    background: rgba(241, 91, 41, 0.16);
-    border: 1px solid rgba(241, 91, 41, 0.4);
-    border-radius: 6px;
-    color: #c94013;
-    font-size: 10.5px;
-    font-weight: 800;
-    margin-top: 5px;
-    padding: 3px 5px;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    gap: 4px;
-  }
-  :host(.theme-dark) .tip-ps-badge {
-    background: rgba(241, 91, 41, 0.22);
-    border-color: rgba(241, 91, 41, 0.55);
-    color: #ff8a65;
-  }
-
-  .tip-drilldown {
-    font-size: 10.5px;
-    font-weight: 800;
-    color: var(--genesis-plum);
-    margin-top: 6px;
-    text-align: center;
-    border-top: 1px dashed rgba(74, 13, 70, 0.25);
-    padding-top: 5px;
-  }
-  :host(.theme-dark) .tip-drilldown {
-    color: #ba68c8;
-    border-top-color: rgba(186, 104, 200, 0.3);
-  }
-
-  /* ── Detailed Usage Card ── */
-  .detailed-usage-card {
-    background: var(--genesis-surface);
-    border: 1px solid var(--genesis-border);
-    border-radius: 16px;
-    padding: 14px;
-    margin-top: 18px;
-    position: relative;
-  }
-  .service-subtabs {
-    display: flex;
-    gap: 8px;
-    border-bottom: 1.5px solid var(--genesis-border);
-    padding-bottom: 4px;
-    margin-bottom: 12px;
-  }
-  .service-subtabs button {
-    appearance: none;
-    background: none;
-    border: 0;
-    border-bottom: 3px solid transparent;
-    color: var(--genesis-muted);
-    cursor: pointer;
-    font: inherit;
-    font-size: 13.5px;
-    font-weight: 700;
-    padding: 6px 10px;
-    margin-bottom: -5.5px;
-    transition: all .2s;
-  }
-  .service-subtabs button.sel {
-    border-bottom-color: var(--genesis-orange);
-    color: var(--genesis-text);
+    margin-bottom: 8px;
   }
 
   .analytics-toolbar {
@@ -643,7 +553,7 @@ const CARD_CSS = `
     justify-content: space-between;
     align-items: center;
     gap: 8px;
-    margin-bottom: 14px;
+    margin-bottom: 12px;
   }
   .granularity-pill {
     background: var(--genesis-card-bg);
@@ -714,7 +624,7 @@ const CARD_CSS = `
     justify-content: center;
     align-items: center;
     gap: 10px;
-    margin-bottom: 14px;
+    margin-bottom: 12px;
     position: relative;
   }
   .date-nav-btn {
@@ -816,12 +726,188 @@ const CARD_CSS = `
     cursor: not-allowed;
   }
 
+  .date-popover-footer {
+    margin-top: 10px;
+    padding-top: 8px;
+    border-top: 1px solid var(--genesis-border);
+    display: flex;
+    justify-content: center;
+  }
+  .date-popover-clear-btn {
+    appearance: none;
+    background: none;
+    border: 1px dashed var(--genesis-border);
+    border-radius: 8px;
+    color: var(--genesis-muted);
+    cursor: pointer;
+    font: inherit;
+    font-size: 11px;
+    font-weight: 700;
+    padding: 5px 10px;
+    width: 100%;
+    transition: all .2s;
+  }
+  .date-popover-clear-btn:hover {
+    border-color: var(--genesis-orange);
+    color: var(--genesis-orange);
+  }
+
+  .chart-container {
+    width: 100%;
+    margin-top: 6px;
+    position: relative;
+    user-select: none;
+  }
+  .chart-svg {
+    width: 100%;
+    height: 195px;
+    overflow: visible;
+    transition: opacity 0.2s ease;
+  }
+  .chart-grid-line {
+    stroke: var(--genesis-border);
+    stroke-dasharray: 4, 4;
+    stroke-width: 1;
+  }
+  .chart-axis-text {
+    fill: var(--genesis-muted);
+    font-size: 11px;
+    font-weight: 600;
+  }
+  .chart-timeline-track {
+    background: var(--genesis-border);
+    border-radius: 4px;
+    height: 6px;
+    margin: 6px 0 10px 34px;
+    overflow: hidden;
+  }
+  .chart-timeline-fill {
+    background: var(--genesis-track);
+    height: 100%;
+    border-radius: 4px;
+  }
+
+  .chart-loading-overlay {
+    position: absolute;
+    inset: 0;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    background: rgba(18, 16, 14, 0.45);
+    backdrop-filter: blur(2px);
+    -webkit-backdrop-filter: blur(2px);
+    border-radius: 12px;
+    z-index: 100;
+    gap: 8px;
+  }
+  :host(:not(.theme-dark)) .chart-loading-overlay {
+    background: rgba(255, 255, 255, 0.55);
+  }
+
+  .chart-tooltip {
+    position: absolute;
+    background: rgba(226, 213, 236, 0.94);
+    color: #4a0d46;
+    backdrop-filter: blur(8px);
+    -webkit-backdrop-filter: blur(8px);
+    border: 1px solid rgba(74, 13, 70, 0.22);
+    border-radius: 10px;
+    padding: 8px 12px;
+    box-shadow: 0 10px 30px rgba(0,0,0,0.32);
+    pointer-events: none;
+    z-index: 150;
+    min-width: 155px;
+    max-width: 215px;
+    opacity: 0;
+    transform: translateY(4px);
+    transition: opacity .15s ease, transform .15s ease;
+  }
+  .chart-tooltip.visible {
+    opacity: 1;
+    transform: translateY(0);
+  }
+  :host(.theme-dark) .chart-tooltip {
+    background: rgba(38, 22, 42, 0.93);
+    color: #f3e5f5;
+    border-color: rgba(186, 104, 200, 0.38);
+    box-shadow: 0 12px 34px rgba(0,0,0,0.65);
+  }
+
+  .tip-date-row {
+    display: flex;
+    justify-content: space-between;
+    align-items: baseline;
+    font-size: 12.5px;
+    font-weight: 800;
+    color: #4a0d46;
+    margin-bottom: 5px;
+    gap: 8px;
+    white-space: nowrap;
+  }
+  :host(.theme-dark) .tip-date-row { color: #e1bee7; }
+
+  .tip-kwh { font-size: 12px; font-weight: 800; color: #5d1757; }
+  :host(.theme-dark) .tip-kwh { color: #ce93d8; }
+
+  .tip-row {
+    display: flex;
+    justify-content: space-between;
+    font-size: 12px;
+    font-weight: 600;
+    color: #4a0d46;
+    margin: 2px 0;
+  }
+  :host(.theme-dark) .tip-row { color: #ede7f6; }
+
+  .tip-divider {
+    border-top: 1px solid rgba(74, 13, 70, 0.22);
+    margin: 5px 0;
+  }
+  :host(.theme-dark) .tip-divider { border-top-color: rgba(186, 104, 200, 0.25); }
+
+  .tip-row.total { font-weight: 800; font-size: 12.5px; }
+
+  .tip-ps-badge {
+    background: rgba(241, 91, 41, 0.16);
+    border: 1px solid rgba(241, 91, 41, 0.4);
+    border-radius: 6px;
+    color: #c94013;
+    font-size: 10.5px;
+    font-weight: 800;
+    margin-top: 5px;
+    padding: 3px 5px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 4px;
+  }
+  :host(.theme-dark) .tip-ps-badge {
+    background: rgba(241, 91, 41, 0.22);
+    border-color: rgba(241, 91, 41, 0.55);
+    color: #ff8a65;
+  }
+
+  .tip-drilldown {
+    font-size: 10.5px;
+    font-weight: 800;
+    color: var(--genesis-plum);
+    margin-top: 6px;
+    text-align: center;
+    border-top: 1px dashed rgba(74, 13, 70, 0.25);
+    padding-top: 5px;
+  }
+  :host(.theme-dark) .tip-drilldown {
+    color: #ba68c8;
+    border-top-color: rgba(186, 104, 200, 0.3);
+  }
+
   .chart-legend {
     display: flex;
     justify-content: center;
     align-items: center;
     gap: 16px;
-    margin-top: 8px;
+    margin-top: 10px;
     font-size: 12px;
     color: var(--genesis-muted);
     font-weight: 600;
@@ -1118,11 +1204,10 @@ function buildTemplate(logoUrl) {
     <style>${CARD_CSS}</style>
     <div class="card">
 
-      <!-- ── HERO ── -->
       <div class="hero">
         <div class="hero-left">
           <div class="hero-logo-ps" id="powershout-logo-wrap">
-            <img src="${logoUrl}" alt="Power Shout" onerror="this.onerror=null;this.src=new URL('./powershout.png', import.meta.url).href;">
+            <img id="hero-logo-img" src="${logoUrl}" alt="Power Shout">
           </div>
           <div class="hero-logo-std" id="standard-logo-wrap" hidden>
             <svg width="34" height="34" viewBox="0 0 24 24" fill="currentColor">
@@ -1138,10 +1223,9 @@ function buildTemplate(logoUrl) {
             <div class="account-hero-sub" id="account-sub-label">Energy Account</div>
           </div>
         </div>
-        <span class="elig" id="bill-due-pill">ELIGIBLE</span>
+        <span class="elig ok" id="bill-due-pill">ELIGIBLE</span>
       </div>
 
-      <!-- ── TOP BILLING SUMMARY CARD ── -->
       <div class="sum-card" id="top-billing-box">
         <div class="sum-hero">
           <div>
@@ -1165,25 +1249,21 @@ function buildTemplate(logoUrl) {
         </div>
       </div>
 
-      <!-- ── LIVE FREE POWER NOW BANNER ── -->
       <div class="live" id="live-bar" hidden>
         <span class="ll"><span class="dot"></span>Free power now</span>
         <span class="lr" id="live-end">—</span>
       </div>
 
-      <!-- ── CAMPAIGN BONUS OFFER BANNER ── -->
       <div class="offer" id="offer-row" hidden>
         <span class="ot" id="offer-lbl">🎁 <b>+1 hr</b> Power Shout offer for you</span>
         <button class="add-btn" id="offer-btn">Add to balance</button>
       </div>
 
-      <!-- ── EXPIRING HOURS BANNER ── -->
       <div class="expiring-bar" id="expiring-bar" hidden>
         <span class="exp-icon">⏳</span>
         <span class="exp-text" id="expiring-text">—</span>
       </div>
 
-      <!-- ── NAVIGATION TABS ── -->
       <div class="tabs" role="tablist" id="card-tabs">
         <button role="tab" id="tab-shout" data-tab="${TAB_SHOUT}" aria-selected="true">Shout</button>
         <button role="tab" id="tab-usage" data-tab="${TAB_USAGE}" aria-selected="false">Usage</button>
@@ -1192,6 +1272,8 @@ function buildTemplate(logoUrl) {
         </button>
         <button role="tab" id="tab-forecast" data-tab="${TAB_FORECAST}" aria-selected="false" hidden>Forecast</button>
         <button role="tab" id="tab-summary" data-tab="${TAB_SUMMARY}" aria-selected="false">Summary</button>
+
+        <div class="main-sync-badge" id="main-meter-sync" style="display:none;"></div>
       </div>
 
       <!-- ── TAB 1: SHOUT ── -->
@@ -1234,99 +1316,78 @@ function buildTemplate(logoUrl) {
         </div>
       </div>
 
-      <!-- ── TAB 2: RECENT & DETAILED USAGE (Live & Cached) ── -->
+      <!-- ── TAB 2: UNIFIED USAGE ── -->
       <div class="panel" id="panel-${TAB_USAGE}" role="tabpanel" hidden>
         
-        <!-- 1. Recent Stacked Cycle Overview Graph -->
-        <div class="usage-header-row">
-          <div class="usage-title">Recent Usage</div>
-        </div>
-
-        <div class="usage-metrics-row">
-          <div class="usage-metric-box">
-            <span class="usage-metric-lbl">Daily avg.</span>
-            <span class="usage-metric-val" id="usage-daily-avg">$—</span>
-          </div>
-          <div class="usage-metric-box">
-            <span class="usage-metric-lbl">Total used</span>
-            <span class="usage-metric-val" id="usage-total-used">$—</span>
-          </div>
-        </div>
-        <div class="usage-period-center" id="usage-period-name">—</div>
-
-        <div class="chart-container" id="chart-wrap">
-          <svg class="chart-svg" id="recent-usage-svg" viewBox="0 0 460 195"></svg>
-          <div class="chart-tooltip" id="chart-tooltip"></div>
-          <div class="chart-timeline-track">
-            <div class="chart-timeline-fill" id="chart-timeline-fill" style="width:0%"></div>
-          </div>
-        </div>
-
-        <div class="chart-legend" id="chart-legend">
-          <div class="legend-item">
-            <span class="legend-dot" style="background:var(--genesis-orange)"></span>
-            <span>Electricity</span>
-          </div>
-          <div class="legend-item" id="legend-gas">
-            <span class="legend-dot" style="background:var(--genesis-plum)"></span>
-            <span>Natural Gas</span>
-          </div>
-          <div class="legend-item" id="legend-ps">
-            ${PS_PIN_SVG}
-            <span>Power Shout</span>
-          </div>
-        </div>
-
-        <!-- 2. Detailed Service Analytics (Monthly & Daily with Drilldown) -->
         <div class="detailed-usage-card">
           <div class="service-subtabs" id="service-subtabs">
-            <button class="sel" data-service="elec">Electricity usage</button>
-            <button data-service="gas" id="btn-subtab-gas">Natural gas usage</button>
+            <button class="sel" data-service="recent" id="btn-subtab-recent">Recent</button>
+            <button data-service="elec" id="btn-subtab-elec">Electricity</button>
+            <button data-service="gas" id="btn-subtab-gas">Natural Gas</button>
             <button data-service="ev" id="btn-subtab-ev" hidden>EV</button>
           </div>
 
-          <div class="analytics-toolbar">
-            <div class="granularity-pill" id="granularity-pill">
-              <button data-gran="monthly">Monthly</button>
-              <button data-gran="daily" class="sel">Daily</button>
-            </div>
-            <div class="unit-toggle-wrap">
-              <span>kWh</span>
-              <button class="unit-switch" id="detail-unit-switch" title="Toggle kWh / $"></button>
-              <span>$</span>
-            </div>
-          </div>
-
-          <div class="date-navigator">
-            <button class="date-nav-btn" id="date-nav-prev">‹</button>
-            <div class="date-nav-label" id="date-nav-label">— ▾</div>
-            <button class="date-nav-btn" id="date-nav-next">›</button>
-
-            <!-- Calendar Popover Picker -->
-            <div class="date-popover" id="date-popover" hidden>
-              <div class="date-popover-header">
-                <span style="font-size:12px;font-weight:700;color:var(--genesis-muted);">Select Period</span>
-                <select class="date-popover-year" id="date-popover-year"></select>
+          <!-- Controls for Recent Mode -->
+          <div id="recent-controls-wrap">
+            <div class="usage-metrics-row">
+              <div class="usage-metric-box">
+                <span class="usage-metric-lbl">Daily avg.</span>
+                <span class="usage-metric-val" id="usage-daily-avg">$—</span>
               </div>
-              <div class="date-popover-grid" id="date-popover-months"></div>
+              <div class="usage-metric-box">
+                <span class="usage-metric-lbl">Total used</span>
+                <span class="usage-metric-val" id="usage-total-used">$—</span>
+              </div>
+            </div>
+            <div class="usage-period-center" id="usage-period-name">—</div>
+          </div>
+
+          <!-- Controls for Historical Browsing Mode (Elec, Gas, EV) -->
+          <div id="historical-controls-wrap" style="display:none;">
+            <div class="analytics-toolbar">
+              <div class="granularity-pill" id="granularity-pill">
+                <button data-gran="monthly">Monthly</button>
+                <button data-gran="daily" class="sel">Daily</button>
+              </div>
+              <div class="unit-toggle-wrap">
+                <span>kWh</span>
+                <button class="unit-switch" id="detail-unit-switch" title="Toggle kWh / $"></button>
+                <span>$</span>
+              </div>
+            </div>
+
+            <div class="date-navigator">
+              <button class="date-nav-btn" id="date-nav-prev">‹</button>
+              <div class="date-nav-label" id="date-nav-label">— ▾</div>
+              <button class="date-nav-btn" id="date-nav-next">›</button>
+
+              <div class="date-popover" id="date-popover" hidden>
+                <div class="date-popover-header">
+                  <span style="font-size:12px;font-weight:700;color:var(--genesis-muted);">Select Period</span>
+                  <select class="date-popover-year" id="date-popover-year"></select>
+                </div>
+                <div class="date-popover-grid" id="date-popover-months"></div>
+                <div class="date-popover-footer">
+                  <button class="date-popover-clear-btn" id="btn-clear-cache">🗑️ Clear Cached Usage</button>
+                </div>
+              </div>
             </div>
           </div>
 
-          <div class="chart-container" id="detail-chart-wrap">
-            <svg class="chart-svg" id="detailed-usage-svg" viewBox="0 0 460 205"></svg>
-            <div class="chart-tooltip" id="detail-chart-tooltip"></div>
+          <!-- Single Unified Chart Canvas -->
+          <div class="chart-container" id="chart-wrap">
+            <svg class="chart-svg" id="usage-chart-svg" viewBox="0 0 460 195"></svg>
+            <div class="chart-tooltip" id="chart-tooltip"></div>
+            <div class="chart-loading-overlay" id="chart-loading-overlay" hidden>
+              <span class="spin" style="width:22px;height:22px;border-width:2.5px;color:var(--genesis-orange);"></span>
+              <span style="font-size:12px;font-weight:700;color:var(--genesis-muted);">Loading usage…</span>
+            </div>
+            <div class="chart-timeline-track" id="recent-timeline-track">
+              <div class="chart-timeline-fill" id="chart-timeline-fill" style="width:0%"></div>
+            </div>
           </div>
 
-          <div class="chart-legend" id="detail-chart-legend" style="margin-top:12px;">
-            <div class="legend-item">
-              <span class="legend-dot" id="detail-legend-dot" style="background:var(--genesis-orange)"></span>
-              <span id="detail-legend-name">Electricity</span>
-            </div>
-            <div class="legend-item" id="detail-legend-ps">
-              ${PS_PIN_SVG}
-              <span>Power Shout</span>
-            </div>
-          </div>
+          <div class="chart-legend" id="usage-legend"></div>
         </div>
 
       </div>
@@ -1364,7 +1425,6 @@ function buildTemplate(logoUrl) {
 
     </div>
 
-    <!-- ── UNIFIED CONFIRMATION MODAL ── -->
     <div class="modal" id="confirm-modal" hidden>
       <div class="dialog">
         <h3 id="confirm-title">Confirm Power Shout</h3>
@@ -1396,13 +1456,15 @@ class GenesisPowerShoutCard extends HTMLElement {
     this._tab = TAB_SHOUT;
 
     this._hasPowerShout = true;
+    this._hasElectricity = true;
     this._hasGas = false;
     this._hasEv = false;
 
-    this._activeService = "elec";
+    this._activeService = "recent";
     this._activeGranularity = "daily";
     this._detailUnit = "dollar";
     this._navDate = new Date();
+    this._lastNavDirection = 1;
 
     this._selectedHours = new Set();
     this._rankedHours = [];
@@ -1416,14 +1478,19 @@ class GenesisPowerShoutCard extends HTMLElement {
     this._currentDaysData = [];
     this._currentDetailData = [];
     this._usageCache = {};
+    this._monthDailyCache = { elec: new Map(), gas: new Map(), ev: new Map() };
     this._popoverOpen = false;
     this._loadingDetail = false;
+    this._prefetchTimer = null;
   }
 
   setConfig(config) {
     this._config = config || {};
     if (this._config.default_tab) {
       this._tab = this._config.default_tab;
+    }
+    if (this._config.clear_cache === true) {
+      this._clearAllCache();
     }
   }
 
@@ -1437,6 +1504,24 @@ class GenesisPowerShoutCard extends HTMLElement {
 
     this._applyThemeMode();
     this._update();
+  }
+
+  _clearAllCache() {
+    this._usageCache = {};
+    this._monthDailyCache = { elec: new Map(), gas: new Map(), ev: new Map() };
+    try {
+      const keysToRemove = [];
+      for (let i = 0; i < sessionStorage.length; i++) {
+        const k = sessionStorage.key(i);
+        if (k && (k.startsWith("genesis_") || k.startsWith("genesisenergy_"))) {
+          keysToRemove.push(k);
+        }
+      }
+      keysToRemove.forEach((k) => sessionStorage.removeItem(k));
+      console.info("[Genesis Card] Local browser cache cleared.");
+    } catch (err) {
+      console.warn("Could not clear sessionStorage:", err);
+    }
   }
 
   _applyThemeMode() {
@@ -1487,13 +1572,32 @@ class GenesisPowerShoutCard extends HTMLElement {
       entity_account_details: findId("account_details") || "sensor.genesis_energy_account_details",
       entity_lpg: findId("lpg_details") || "sensor.genesis_energy_lpg_details",
       entity_ev_usage: findId("ev_day_usage") || "sensor.genesis_energy_ev_day_usage",
+      entity_bill_balance: findId("bill_balance") || "sensor.genesis_energy_bill_balance",
+      entity_bill_due_date: findId("bill_due_date") || "sensor.genesis_energy_bill_due_date",
+      entity_booking_in_progress: findId("powershout_booking_in_progress") || "binary_sensor.genesis_energy_power_shout_booking_in_progress",
+      entity_electricity_updater: findId("electricity_statistics_updater") || "sensor.genesis_energy_electricity_statistics_updater",
+      entity_gas_updater: findId("gas_statistics_updater") || "sensor.genesis_energy_gas_statistics_updater",
       ...this._config,
     };
   }
 
+  _getHiddenServices() {
+    const hidden = new Set();
+    const cfgHidden = this._config.hidden_services;
+    if (Array.isArray(cfgHidden)) {
+      cfgHidden.forEach((s) => hidden.add(String(s).toLowerCase().trim()));
+    } else if (typeof cfgHidden === "string") {
+      cfgHidden.split(",").forEach((s) => hidden.add(s.toLowerCase().trim()));
+    }
+    if (this._config.show_ev === false) hidden.add("ev");
+    if (this._config.show_gas === false || this._config.show_natural_gas === false) hidden.add("gas");
+    if (this._config.show_elec === false || this._config.show_electricity === false) hidden.add("elec");
+    if (this._config.show_recent === false) hidden.add("recent");
+    return hidden;
+  }
+
   _build() {
-    const logoUrl = new URL("./powershout.svg", import.meta.url).href;
-    this.shadowRoot.innerHTML = buildTemplate(logoUrl);
+    this.shadowRoot.innerHTML = buildTemplate(LOGO_SVG_URL);
     this._built = true;
     this._initDateLimits();
     this._wireListeners();
@@ -1523,6 +1627,16 @@ class GenesisPowerShoutCard extends HTMLElement {
   }
 
   _wireListeners() {
+    const logoImg = this._el("hero-logo-img");
+    if (logoImg) {
+      logoImg.addEventListener("error", () => {
+        if (!logoImg.dataset.fallbackTried) {
+          logoImg.dataset.fallbackTried = "true";
+          logoImg.src = LOGO_PNG_URL;
+        }
+      });
+    }
+
     this.shadowRoot.querySelectorAll('[role="tab"]').forEach((tab) => {
       tab.addEventListener("click", () => this._selectTab(tab.dataset.tab));
     });
@@ -1602,26 +1716,14 @@ class GenesisPowerShoutCard extends HTMLElement {
       this._executeConfirmedBooking();
     });
 
-    // Recent Usage Hitbox Listeners
-    const svg = this._el("recent-usage-svg");
-    const chartWrap = this._el("chart-wrap");
-
-    svg.addEventListener("pointermove", (e) => {
-      const target = e.target.closest(".col-hit-area");
-      if (target) {
-        const idx = parseInt(target.dataset.col, 10);
-        this._showRecentTooltip(idx);
-      }
-    });
-    chartWrap.addEventListener("pointerleave", () => this._hideRecentTooltip());
-
-    // Detailed Usage Subtabs
+    // Subtabs within Unified Usage Card
     this.shadowRoot.querySelectorAll("#service-subtabs button").forEach((btn) => {
       btn.addEventListener("click", () => {
         this.shadowRoot.querySelectorAll("#service-subtabs button").forEach((b) => b.classList.remove("sel"));
         btn.classList.add("sel");
         this._activeService = btn.dataset.service;
-        this._renderDetailedUsageGraph();
+        this._updateMainMeterSyncBadge(this._entities);
+        this._renderUnifiedUsageGraph();
       });
     });
 
@@ -1632,7 +1734,7 @@ class GenesisPowerShoutCard extends HTMLElement {
         btn.classList.add("sel");
         this._activeGranularity = btn.dataset.gran;
         this._closePopover();
-        this._renderDetailedUsageGraph();
+        this._renderUnifiedUsageGraph();
       });
     });
 
@@ -1641,11 +1743,17 @@ class GenesisPowerShoutCard extends HTMLElement {
     unitSwitch.addEventListener("click", () => {
       this._detailUnit = this._detailUnit === "dollar" ? "kwh" : "dollar";
       unitSwitch.classList.toggle("active-dollar", this._detailUnit === "dollar");
-      this._renderDetailedUsageGraph();
+      this._renderUnifiedUsageGraph();
     });
 
-    this._el("date-nav-prev").addEventListener("click", () => this._shiftDate(-1));
-    this._el("date-nav-next").addEventListener("click", () => this._shiftDate(1));
+    this._el("date-nav-prev").addEventListener("click", () => {
+      this._lastNavDirection = -1;
+      this._shiftDate(-1);
+    });
+    this._el("date-nav-next").addEventListener("click", () => {
+      this._lastNavDirection = 1;
+      this._shiftDate(1);
+    });
 
     // Calendar Popover Toggle
     this._el("date-nav-label").addEventListener("click", (e) => {
@@ -1659,22 +1767,35 @@ class GenesisPowerShoutCard extends HTMLElement {
       }
     });
 
-    // Detailed SVG Tooltip Hitboxes & Click-to-Drilldown
-    const detailSvg = this._el("detailed-usage-svg");
-    const detailChartWrap = this._el("detail-chart-wrap");
+    // Clear Cache Button in Popover
+    this._el("btn-clear-cache").addEventListener("click", () => {
+      this._clearAllCache();
+      const btn = this._el("btn-clear-cache");
+      const origText = btn.textContent;
+      btn.textContent = "✓ Cache Cleared!";
+      setTimeout(() => {
+        btn.textContent = origText;
+        this._closePopover();
+        this._renderUnifiedUsageGraph();
+      }, 600);
+    });
 
-    detailSvg.addEventListener("pointermove", (e) => {
-      const target = e.target.closest(".detail-col-hit");
+    // SVG Hitbox Interaction & Click-to-Drilldown
+    const svg = this._el("usage-chart-svg");
+    const chartWrap = this._el("chart-wrap");
+
+    svg.addEventListener("pointermove", (e) => {
+      const target = e.target.closest(".chart-col-hit");
       if (target) {
         const idx = parseInt(target.dataset.col, 10);
-        this._showDetailTooltip(idx);
+        this._showTooltip(idx);
       }
     });
-    detailChartWrap.addEventListener("pointerleave", () => this._hideDetailTooltip());
+    chartWrap.addEventListener("pointerleave", () => this._hideTooltip());
 
-    // Click Bar to Drilldown from Monthly to Daily
-    detailSvg.addEventListener("click", (e) => {
-      const target = e.target.closest(".detail-col-hit");
+    svg.addEventListener("click", (e) => {
+      if (this._activeService === "recent") return;
+      const target = e.target.closest(".chart-col-hit");
       if (!target) return;
       const idx = parseInt(target.dataset.col, 10);
       const d = this._currentDetailData[idx];
@@ -1688,8 +1809,8 @@ class GenesisPowerShoutCard extends HTMLElement {
           b.classList.toggle("sel", b.dataset.gran === "daily");
         });
 
-        this._hideDetailTooltip();
-        this._renderDetailedUsageGraph();
+        this._hideTooltip();
+        this._renderUnifiedUsageGraph();
       }
     });
   }
@@ -1747,7 +1868,7 @@ class GenesisPowerShoutCard extends HTMLElement {
           this._navDate.setFullYear(chosenYear);
           this._navDate.setMonth(m);
           this._closePopover();
-          this._renderDetailedUsageGraph();
+          this._renderUnifiedUsageGraph();
         });
       });
     };
@@ -1759,7 +1880,7 @@ class GenesisPowerShoutCard extends HTMLElement {
       if (this._activeGranularity === "monthly") {
         this._navDate.setFullYear(newY);
         this._closePopover();
-        this._renderDetailedUsageGraph();
+        this._renderUnifiedUsageGraph();
       } else {
         renderMonthsForYear(newY);
       }
@@ -1790,130 +1911,85 @@ class GenesisPowerShoutCard extends HTMLElement {
         this._navDate = testD;
       }
     }
-    this._renderDetailedUsageGraph();
+    this._renderUnifiedUsageGraph();
   }
 
-  _showRecentTooltip(idx) {
-    const d = this._currentDaysData[idx];
+  _showTooltip(idx) {
     const tooltip = this._el("chart-tooltip");
-    if (!d || !d.hasData) {
-      this._hideRecentTooltip();
-      return;
-    }
-
-    let psBadgeHtml = "";
-    if (d.hasPS) {
-      psBadgeHtml = `<div class="tip-ps-badge">${PS_PIN_SVG} Power Shout Applied</div>`;
-    }
-
-    let gasRowHtml = "";
-    if (this._hasGas || d.gas > 0) {
-      gasRowHtml = `
-        <div class="tip-row">
-          <span>Gas:</span>
-          <span>$${fmtNum(d.gas, 2)}</span>
-        </div>
-      `;
-    }
-
-    tooltip.innerHTML = `
-      <div class="tip-date-row">
-        <span>${escapeHtml(fmtTooltipDate(d.date))}</span>
-      </div>
-      <div class="tip-row">
-        <span>Electricity:</span>
-        <span>$${fmtNum(d.elec, 2)}</span>
-      </div>
-      ${gasRowHtml}
-      <div class="tip-divider"></div>
-      <div class="tip-row total">
-        <span>Total:</span>
-        <span>$${fmtNum(d.total, 2)}</span>
-      </div>
-      ${psBadgeHtml}
-    `;
-
     const chartWrap = this._el("chart-wrap");
-    const wrapRect = chartWrap.getBoundingClientRect();
-    const cxPct = d.cx / 460;
-    const pixelX = cxPct * wrapRect.width;
 
-    const isRightHalf = pixelX > (wrapRect.width / 2);
-    if (isRightHalf) {
-      tooltip.style.left = "8px";
-      tooltip.style.right = "auto";
+    if (this._activeService === "recent") {
+      const d = this._currentDaysData[idx];
+      if (!d || !d.hasData) {
+        this._hideTooltip();
+        return;
+      }
+
+      let psBadgeHtml = d.hasPS ? `<div class="tip-ps-badge">${PS_PIN_SVG} Power Shout Applied</div>` : "";
+      let gasRowHtml = (this._hasGas || d.gas > 0) ? `
+        <div class="tip-row"><span>Gas:</span><span>$${fmtNum(d.gas, 2)}</span></div>
+      ` : "";
+
+      tooltip.innerHTML = `
+        <div class="tip-date-row"><span>${escapeHtml(fmtTooltipDate(d.date))}</span></div>
+        <div class="tip-row"><span>Electricity:</span><span>$${fmtNum(d.elec, 2)}</span></div>
+        ${gasRowHtml}
+        <div class="tip-divider"></div>
+        <div class="tip-row total"><span>Total:</span><span>$${fmtNum(d.total, 2)}</span></div>
+        ${psBadgeHtml}
+      `;
+
+      const cxPct = d.cx / 460;
+      const wrapRect = chartWrap.getBoundingClientRect();
+      const isRightHalf = (cxPct * wrapRect.width) > (wrapRect.width / 2);
+      tooltip.style.left = isRightHalf ? "8px" : "auto";
+      tooltip.style.right = isRightHalf ? "auto" : "8px";
+      tooltip.style.top = "6px";
+      tooltip.classList.add("visible");
     } else {
-      tooltip.style.left = "auto";
-      tooltip.style.right = "8px";
-    }
+      const d = this._currentDetailData[idx];
+      if (!d || !d.hasData) {
+        this._hideTooltip();
+        return;
+      }
 
-    tooltip.style.top = "6px";
-    tooltip.classList.add("visible");
+      let psBadgeHtml = "";
+      if (d.hasPS) {
+        let extraInfo = "";
+        if (d.psCredits > 0) extraInfo += ` · $${fmtNum(d.psCredits, 2)} credited`;
+        if (d.psConsumptions > 0) extraInfo += ` (${fmtNum(d.psConsumptions, 2)} kWh free)`;
+        psBadgeHtml = `<div class="tip-ps-badge">${PS_PIN_SVG} Power Shout${extraInfo || " Applied"}</div>`;
+      }
+
+      let drillHint = (this._activeGranularity === "monthly" && d.hasData)
+        ? `<div class="tip-drilldown">Click bar to view daily usage ↗</div>`
+        : "";
+
+      tooltip.innerHTML = `
+        <div class="tip-date-row">
+          <span>${escapeHtml(d.title)}</span>
+          <span class="tip-kwh">${fmtNum(d.kw, 2)} kWh</span>
+        </div>
+        <div class="tip-row total">
+          <span>${escapeHtml(d.label)}</span>
+          <span style="font-weight:800;">$${fmtNum(d.cost, 2)}</span>
+        </div>
+        ${psBadgeHtml}
+        ${drillHint}
+      `;
+
+      const cxPct = d.cx / 460;
+      const wrapRect = chartWrap.getBoundingClientRect();
+      const isRightHalf = (cxPct * wrapRect.width) > (wrapRect.width / 2);
+      tooltip.style.left = isRightHalf ? "8px" : "auto";
+      tooltip.style.right = isRightHalf ? "auto" : "8px";
+      tooltip.style.top = "6px";
+      tooltip.classList.add("visible");
+    }
   }
 
-  _hideRecentTooltip() {
+  _hideTooltip() {
     const tooltip = this._el("chart-tooltip");
-    if (tooltip) tooltip.classList.remove("visible");
-  }
-
-  _showDetailTooltip(idx) {
-    const d = this._currentDetailData[idx];
-    const tooltip = this._el("detail-chart-tooltip");
-    if (!d || !d.hasData) {
-      this._hideDetailTooltip();
-      return;
-    }
-
-    let psBadgeHtml = "";
-    if (d.hasPS) {
-      let extraInfo = "";
-      if (d.psCredits > 0) {
-        extraInfo += ` · $${fmtNum(d.psCredits, 2)} credited`;
-      }
-      if (d.psConsumptions > 0) {
-        extraInfo += ` (${fmtNum(d.psConsumptions, 2)} kWh free)`;
-      }
-      psBadgeHtml = `<div class="tip-ps-badge">${PS_PIN_SVG} Power Shout${extraInfo || " Applied"}</div>`;
-    }
-
-    let drillHint = "";
-    if (this._activeGranularity === "monthly" && d.hasData) {
-      drillHint = `<div class="tip-drilldown">Click bar to view daily usage ↗</div>`;
-    }
-
-    tooltip.innerHTML = `
-      <div class="tip-date-row">
-        <span>${escapeHtml(d.title)}</span>
-        <span class="tip-kwh">${fmtNum(d.kw, 2)} kWh</span>
-      </div>
-      <div class="tip-row total">
-        <span>${escapeHtml(d.label)}</span>
-        <span style="font-weight:800;">$${fmtNum(d.cost, 2)}</span>
-      </div>
-      ${psBadgeHtml}
-      ${drillHint}
-    `;
-
-    const chartWrap = this._el("detail-chart-wrap");
-    const wrapRect = chartWrap.getBoundingClientRect();
-    const cxPct = d.cx / 460;
-    const pixelX = cxPct * wrapRect.width;
-
-    const isRightHalf = pixelX > (wrapRect.width / 2);
-    if (isRightHalf) {
-      tooltip.style.left = "8px";
-      tooltip.style.right = "auto";
-    } else {
-      tooltip.style.left = "auto";
-      tooltip.style.right = "8px";
-    }
-
-    tooltip.style.top = "6px";
-    tooltip.classList.add("visible");
-  }
-
-  _hideDetailTooltip() {
-    const tooltip = this._el("detail-chart-tooltip");
     if (tooltip) tooltip.classList.remove("visible");
   }
 
@@ -1939,6 +2015,7 @@ class GenesisPowerShoutCard extends HTMLElement {
       const panel = this._el(`panel-${name}`);
       if (panel) panel.toggleAttribute("hidden", name !== tab);
     }
+    this._updateMainMeterSyncBadge(this._entities);
   }
 
   _openBookingConfirmation() {
@@ -2063,6 +2140,13 @@ class GenesisPowerShoutCard extends HTMLElement {
     }
   }
 
+  _showChartLoading(isLoading) {
+    const overlay = this._el("chart-loading-overlay");
+    const svg = this._el("usage-chart-svg");
+    if (overlay) overlay.toggleAttribute("hidden", !isLoading);
+    if (svg) svg.style.opacity = isLoading ? "0.38" : "1";
+  }
+
   _update() {
     if (!this._built || !this._hass) return;
     const entities = this._resolveEntities();
@@ -2107,9 +2191,33 @@ class GenesisPowerShoutCard extends HTMLElement {
     
     this._hasGas = supplies.some(s => (s.type || s.text || "").toLowerCase().includes("gas"));
     this._hasEv = Boolean(this._hass.states[entities.entity_ev_usage] || JSON.stringify(attrs.billing_plans || "").toLowerCase().includes("ev"));
+    this._hasElectricity = true;
 
-    this._el("btn-subtab-gas").style.display = this._hasGas ? "inline-block" : "none";
-    this._el("btn-subtab-ev").style.display = this._hasEv ? "inline-block" : "none";
+    // Service Filtering via Config (hidden_services)
+    const hidden = this._getHiddenServices();
+    const showRecent = !hidden.has("recent");
+    const showElec = this._hasElectricity && !hidden.has("elec") && !hidden.has("electricity");
+    const showGas = this._hasGas && !hidden.has("gas") && !hidden.has("natural_gas") && !hidden.has("naturalgas");
+    const showEv = this._hasEv && !hidden.has("ev");
+
+    this._el("btn-subtab-recent").style.display = showRecent ? "inline-block" : "none";
+    this._el("btn-subtab-elec").style.display = showElec ? "inline-block" : "none";
+    this._el("btn-subtab-gas").style.display = showGas ? "inline-block" : "none";
+    this._el("btn-subtab-ev").style.display = showEv ? "inline-block" : "none";
+
+    const visibleServices = [];
+    if (showRecent) visibleServices.push("recent");
+    if (showElec) visibleServices.push("elec");
+    if (showGas) visibleServices.push("gas");
+    if (showEv) visibleServices.push("ev");
+
+    if (!visibleServices.includes(this._activeService)) {
+      this._activeService = visibleServices[0] || "recent";
+    }
+
+    this.shadowRoot.querySelectorAll("#service-subtabs button").forEach((b) => {
+      b.classList.toggle("sel", b.dataset.service === this._activeService);
+    });
 
     const psWrap = this._el("powershout-hero-wrap");
     const psLogoWrap = this._el("powershout-logo-wrap");
@@ -2118,7 +2226,9 @@ class GenesisPowerShoutCard extends HTMLElement {
     const tabShout = this._el("tab-shout");
     const tabPast = this._el("tab-past");
     const tabForecast = this._el("tab-forecast");
-    const eligPill = this._el("bill-due-pill");
+
+    this._updateDuePill(entities, hasPowerShout);
+    this._updateMainMeterSyncBadge(entities);
 
     if (hasPowerShout) {
       psWrap.removeAttribute("hidden");
@@ -2133,10 +2243,6 @@ class GenesisPowerShoutCard extends HTMLElement {
       this._availableBalance = !isNaN(num) ? num : 0;
       this._el("bal-num").textContent = !isNaN(num) ? num : "0";
 
-      eligPill.textContent = "ELIGIBLE";
-      eligPill.className = "elig";
-
-      // Prominent Expiring Hours Banner (Visible when Genesis provides expiry notice)
       const expBar = this._el("expiring-bar");
       const expText = this._el("expiring-text");
       const expMsg = balSt?.attributes?.expiring_hours_message || balSt?.attributes?.expiring_hours_tooltip;
@@ -2151,7 +2257,7 @@ class GenesisPowerShoutCard extends HTMLElement {
       this._lastBookings = balSt?.attributes?.bookings || [];
       this._renderBookings(this._lastBookings);
       this._updatePastHours(balSt?.attributes?.recommended_hours);
-      this._updateLiveBar(this._lastBookings);
+      this._updateLiveBar(this._lastBookings, entities);
     } else {
       psWrap.setAttribute("hidden", "");
       psLogoWrap.setAttribute("hidden", "");
@@ -2163,9 +2269,6 @@ class GenesisPowerShoutCard extends HTMLElement {
 
       this._el("expiring-bar").setAttribute("hidden", "");
 
-      eligPill.textContent = "ACCOUNT ACTIVE";
-      eligPill.className = "elig";
-
       if (this._tab === TAB_SHOUT || this._tab === TAB_PAST) {
         this._selectTab(TAB_USAGE);
       }
@@ -2174,7 +2277,6 @@ class GenesisPowerShoutCard extends HTMLElement {
     this._selectTab(this._tab);
     this._updateTopBillingBox(entities);
 
-    // Campaign Offers Banner
     const offerSt = this._hass.states[entities.entity_offers_available];
     const offerRow = this._el("offer-row");
     const isOfferActive = offerSt && (
@@ -2204,8 +2306,102 @@ class GenesisPowerShoutCard extends HTMLElement {
     this._syncCtaText();
     this._updateForecast();
     this._updateSummary(entities);
-    this._renderRecentUsageGraph(entities);
-    this._renderDetailedUsageGraph();
+    this._renderUnifiedUsageGraph();
+  }
+
+  _updateDuePill(entities, hasPowerShout) {
+    const pill = this._el("bill-due-pill");
+    const balSt = this._hass.states[entities.entity_bill_balance];
+    const dueSt = this._hass.states[entities.entity_bill_due_date];
+
+    let label = hasPowerShout ? "ELIGIBLE" : "ACCOUNT ACTIVE";
+    let toneClass = "ok";
+
+    if (balSt && balSt.state !== "unavailable" && balSt.state !== "unknown") {
+      const bal = parseFloat(balSt.state);
+      if (!isNaN(bal)) {
+        if (bal < 0) {
+          label = `$${Math.abs(bal).toFixed(2)} in credit`;
+          toneClass = "ok";
+        } else if (bal === 0) {
+          label = "Up to date";
+          toneClass = "ok";
+        } else {
+          const dueStr = dueSt?.state;
+          const dueDate = dueStr ? new Date(dueStr) : null;
+          if (dueDate && !isNaN(dueDate)) {
+            const midnight = new Date();
+            midnight.setHours(0, 0, 0, 0);
+            dueDate.setHours(0, 0, 0, 0);
+            const days = Math.round((dueDate - midnight) / 86400000);
+            if (days < 0) {
+              label = `Overdue · $${bal.toFixed(2)}`;
+              toneClass = "bad";
+            } else if (days === 0) {
+              label = `Due today · $${bal.toFixed(2)}`;
+              toneClass = "bad";
+            } else {
+              label = `Due ${fmtDate(dueStr)} · $${bal.toFixed(2)}`;
+              toneClass = "warn";
+            }
+          } else {
+            label = `$${bal.toFixed(2)} owing`;
+            toneClass = "warn";
+          }
+        }
+      }
+    }
+
+    pill.className = `elig ${toneClass}`;
+    pill.textContent = label;
+  }
+
+  _updateMainMeterSyncBadge(entities) {
+    const el = this._el("main-meter-sync");
+    if (!el) return;
+
+    if (this._tab !== TAB_USAGE) {
+      el.style.display = "none";
+      return;
+    }
+
+    let updaterId = entities?.entity_electricity_updater;
+    if (this._activeService === "gas") {
+      updaterId = entities?.entity_gas_updater;
+    }
+
+    if (!updaterId) {
+      el.style.display = "none";
+      return;
+    }
+
+    const updaterSt = this._hass.states[updaterId];
+    const latest = updaterSt?.attributes?.latest_reading;
+    const daysBehind = updaterSt?.attributes?.days_behind;
+
+    if (!latest) {
+      el.style.display = "none";
+      return;
+    }
+
+    const d = new Date(latest);
+    const dateLabel = isNaN(d) ? latest.split("T")[0] : d.toLocaleDateString([], { weekday: "short", day: "numeric", month: "short" });
+    const lagText = daysBehind != null ? `(${daysBehind}d lag)` : "";
+
+    let dotClass = "usage-sync-dot";
+    if (daysBehind > 3) {
+      dotClass += " stalled";
+    } else if (daysBehind > 2) {
+      dotClass += " lagging";
+    }
+
+    el.innerHTML = `
+      <span class="${dotClass}"></span>
+      <span class="sync-text-prefix">Meter:&nbsp;</span>
+      <strong>${escapeHtml(dateLabel)}</strong>&nbsp;
+      <span style="opacity:0.8;">${escapeHtml(lagText)}</span>
+    `;
+    el.style.display = "inline-flex";
   }
 
   _updateTopBillingBox(entities) {
@@ -2245,8 +2441,22 @@ class GenesisPowerShoutCard extends HTMLElement {
     this._el("top-progress-fill").style.width = `${ratio}%`;
   }
 
-  _updateLiveBar(bookings) {
+  _updateLiveBar(bookings, entities) {
     const bar = this._el("live-bar");
+    const inProgSt = entities?.entity_booking_in_progress ? this._hass.states[entities.entity_booking_in_progress] : null;
+
+    if (inProgSt && inProgSt.state === "on") {
+      const current = inProgSt.attributes?.current_booking;
+      if (current?.startDateTime) {
+        const end = new Date(new Date(current.startDateTime).getTime() + (Number(current.duration) || 1) * 3600000);
+        this._el("live-end").textContent = `ends ${fmtHour(end.toISOString())}`;
+      } else {
+        this._el("live-end").textContent = "ends soon";
+      }
+      bar.removeAttribute("hidden");
+      return;
+    }
+
     if (!Array.isArray(bookings)) {
       bar.setAttribute("hidden", "");
       return;
@@ -2406,7 +2616,78 @@ class GenesisPowerShoutCard extends HTMLElement {
     this._el("cost-sub-alt").textContent = sub;
   }
 
-  // ── Two-Month Batched Persistent Cache Fetcher ──
+  _getMonthFromCache(service, monthKey) {
+    if (this._monthDailyCache[service]?.has(monthKey)) {
+      return this._monthDailyCache[service].get(monthKey);
+    }
+    try {
+      const raw = sessionStorage.getItem(`genesis_daily_${service}_${monthKey}`);
+      if (raw) {
+        const parsed = JSON.parse(raw);
+        if (Array.isArray(parsed) && parsed.length > 0) {
+          this._monthDailyCache[service].set(monthKey, parsed);
+          return parsed;
+        }
+      }
+    } catch {}
+    return null;
+  }
+
+  _saveMonthToCache(service, monthKey, items) {
+    if (!items || !items.length) return;
+    this._monthDailyCache[service].set(monthKey, items);
+    try {
+      sessionStorage.setItem(`genesis_daily_${service}_${monthKey}`, JSON.stringify(items));
+    } catch {}
+  }
+
+  _scheduleBackgroundPrefetch(service, year, month) {
+    clearTimeout(this._prefetchTimer);
+    this._prefetchTimer = setTimeout(async () => {
+      const now = new Date();
+      const currentYear = now.getFullYear();
+      const currentMonth = now.getMonth();
+      const minYear = currentYear - 3;
+      const pad = (n) => String(n).padStart(2, "0");
+
+      let targetYear = year;
+      let targetMonth = month + (this._lastNavDirection * 3);
+      const testD = new Date(targetYear, targetMonth, 1);
+      targetYear = testD.getFullYear();
+      targetMonth = testD.getMonth();
+
+      if (targetYear < minYear || (targetYear > currentYear) || (targetYear === currentYear && targetMonth > currentMonth)) {
+        return;
+      }
+
+      const targetKey = `${targetYear}-${pad(targetMonth + 1)}`;
+      if (this._getMonthFromCache(service, targetKey)) {
+        return;
+      }
+
+      try {
+        const fetchStart = new Date(targetYear, targetMonth - 1, 1);
+        if (fetchStart.getFullYear() < minYear) fetchStart.setFullYear(minYear, 0, 1);
+        const fetchEnd = new Date(targetYear, targetMonth + 2, 0);
+
+        const startDateStr = `${fetchStart.getFullYear()}-${pad(fetchStart.getMonth() + 1)}-01`;
+        const endDateStr = `${fetchEnd.getFullYear()}-${pad(fetchEnd.getMonth() + 1)}-${pad(fetchEnd.getDate())}`;
+
+        const rawBatch = await this._fetchGenesisUsage(service, startDateStr, endDateStr, "DAILY");
+        const byMonth = {};
+        for (const item of rawBatch) {
+          if (!item?.startDate) continue;
+          const mKey = item.startDate.slice(0, 7);
+          if (!byMonth[mKey]) byMonth[mKey] = [];
+          byMonth[mKey].push(item);
+        }
+        for (const [mKey, monthItems] of Object.entries(byMonth)) {
+          this._saveMonthToCache(service, mKey, monthItems);
+        }
+      } catch {}
+    }, 1000);
+  }
+
   async _fetchGenesisUsage(fuel, startDateStr, endDateStr, intervalType) {
     const cacheKey = `${fuel}_${intervalType}_${startDateStr}_${endDateStr}`;
     const storageKey = `genesis_usage_${cacheKey}`;
@@ -2450,8 +2731,23 @@ class GenesisPowerShoutCard extends HTMLElement {
     return [];
   }
 
-  // ── 1. Render Recent Stacked Cycle Graph ──
-  async _renderRecentUsageGraph(entities) {
+  // ── Unified Graph Rendering Engine (Recent & Historical) ────────────────
+  async _renderUnifiedUsageGraph() {
+    const isRecent = this._activeService === "recent";
+    this._el("recent-controls-wrap").style.display = isRecent ? "block" : "none";
+    this._el("historical-controls-wrap").style.display = isRecent ? "none" : "block";
+    this._el("recent-timeline-track").style.display = isRecent ? "block" : "none";
+
+    if (isRecent) {
+      await this._renderRecentStackedCanvas();
+    } else {
+      await this._renderHistoricalCanvas();
+    }
+  }
+
+  async _renderRecentStackedCanvas() {
+    this._showChartLoading(false);
+    const entities = this._entities;
     const acctDetailsSt = this._hass.states[entities.entity_account_details];
     const totalUsedSt = this._hass.states[entities.entity_bill_total_used];
     const balSt = this._hass.states[entities.entity_balance];
@@ -2467,18 +2763,16 @@ class GenesisPowerShoutCard extends HTMLElement {
     }
     this._el("usage-total-used").textContent = `$${totalUsedNum.toFixed(2)}`;
 
-    let periodStr = sidekick?.barArea?.leftText || "September – October";
-    let periodName = "September - October";
-    if (periodStr.includes("–")) {
-      const parts = periodStr.split("–").map((s) => s.trim().replace(/[0-9]/g, "").trim());
+    let periodStr = sidekick?.barArea?.leftText || "Current Period";
+    let periodName = "Billing Period";
+    if (periodStr.includes("–") || periodStr.includes("-")) {
+      const delim = periodStr.includes("–") ? "–" : "-";
+      const parts = periodStr.split(delim).map((s) => s.trim().replace(/[0-9]/g, "").trim());
       if (parts.length === 2 && parts[0] && parts[1]) {
         periodName = `${parts[0]} - ${parts[1]}`;
       }
     }
     this._el("usage-period-name").textContent = periodName;
-
-    this._el("legend-gas").style.display = this._hasGas ? "flex" : "none";
-    this._el("legend-ps").style.display = this._hasPowerShout ? "flex" : "none";
 
     const numColumns = parseInt(this._config.chart_days, 10) || 17;
     const now = new Date();
@@ -2602,7 +2896,7 @@ class GenesisPowerShoutCard extends HTMLElement {
 
     this._currentDaysData = daysData;
 
-    const svg = this._el("recent-usage-svg");
+    const svg = this._el("usage-chart-svg");
     const yGridTicks = [0, maxVal * 0.33, maxVal * 0.66, maxVal];
 
     let svgHtml = `
@@ -2656,7 +2950,7 @@ class GenesisPowerShoutCard extends HTMLElement {
       }
 
       svgHtml += `
-        <rect x="${d.cx - colStep / 2}" y="0" width="${colStep}" height="${chartHeight}" fill="transparent" class="col-hit-area" data-col="${idx}" style="cursor:pointer;" />
+        <rect x="${d.cx - colStep / 2}" y="0" width="${colStep}" height="${chartHeight}" fill="transparent" class="chart-col-hit" data-col="${idx}" style="cursor:pointer;" />
       `;
     });
 
@@ -2664,10 +2958,30 @@ class GenesisPowerShoutCard extends HTMLElement {
 
     const timelinePct = Math.min(100, Math.max(0, (recordedDaysCount / numColumns) * 100));
     this._el("chart-timeline-fill").style.width = `${timelinePct}%`;
+
+    // Render Recent Legend
+    const legend = this._el("usage-legend");
+    legend.innerHTML = `
+      <div class="legend-item">
+        <span class="legend-dot" style="background:var(--genesis-orange)"></span>
+        <span>Electricity</span>
+      </div>
+      ${this._hasGas ? `
+        <div class="legend-item">
+          <span class="legend-dot" style="background:var(--genesis-plum)"></span>
+          <span>Natural Gas</span>
+        </div>
+      ` : ''}
+      ${this._hasPowerShout ? `
+        <div class="legend-item">
+          ${PS_PIN_SVG}
+          <span>Power Shout</span>
+        </div>
+      ` : ''}
+    `;
   }
 
-  // ── 2. Render Detailed Service Analytics (Click-to-Drilldown & Dual Pre-Cache) ──
-  async _renderDetailedUsageGraph() {
+  async _renderHistoricalCanvas() {
     if (this._loadingDetail) return;
     this._loadingDetail = true;
 
@@ -2679,15 +2993,11 @@ class GenesisPowerShoutCard extends HTMLElement {
     let serviceLabel = "Electricity";
     if (service === "gas") {
       barColor = "var(--genesis-plum)";
-      serviceLabel = "Gas";
+      serviceLabel = "Natural Gas";
     } else if (service === "ev") {
       barColor = "var(--genesis-teal)";
       serviceLabel = "EV";
     }
-
-    this._el("detail-legend-dot").style.background = barColor;
-    this._el("detail-legend-name").textContent = serviceLabel;
-    this._el("detail-legend-ps").style.display = this._hasPowerShout && service === "elec" ? "flex" : "none";
 
     const monthsFull = ["January","February","March","April","May","June","July","August","September","October","November","December"];
     const monthsShort = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
@@ -2706,6 +3016,8 @@ class GenesisPowerShoutCard extends HTMLElement {
     const prevBtn = this._el("date-nav-prev");
     const nextBtn = this._el("date-nav-next");
 
+    let apiUsageList = [];
+
     if (gran === "monthly") {
       const year = this._navDate.getFullYear();
       navLabel.textContent = `${year} ▾`;
@@ -2713,25 +3025,72 @@ class GenesisPowerShoutCard extends HTMLElement {
       endDateStr = `${year}-12-31`;
       prevBtn.disabled = year <= minYear;
       nextBtn.disabled = year >= currentYear;
+
+      this._showChartLoading(true);
+      apiUsageList = await this._fetchGenesisUsage(service, startDateStr, endDateStr, "MONTHLY");
+      this._showChartLoading(false);
     } else {
       const year = this._navDate.getFullYear();
       const month = this._navDate.getMonth();
       const numDays = new Date(year, month + 1, 0).getDate();
       navLabel.textContent = `${monthsFull[month]} ${year} ▾`;
 
-      const prevD = new Date(year, month - 1, 1);
-      const prevMKey = `${prevD.getFullYear()}-${pad(prevD.getMonth() + 1)}`;
-      const hasPrevInCache = sessionStorage.getItem(`genesis_usage_${service}_DAILY_${prevMKey}`) != null;
-
-      if (!hasPrevInCache && prevD.getFullYear() >= minYear) {
-        startDateStr = `${prevD.getFullYear()}-${pad(prevD.getMonth() + 1)}-01`;
-      } else {
-        startDateStr = `${year}-${pad(month + 1)}-01`;
-      }
-
-      endDateStr = `${year}-${pad(month + 1)}-${pad(numDays)}`;
       prevBtn.disabled = year <= minYear && month === 0;
       nextBtn.disabled = year >= currentYear && month >= currentMonth;
+
+      const targetMonthKey = `${year}-${pad(month + 1)}`;
+      const isCurrentMonth = (year === currentYear && month === currentMonth);
+      let cachedMonthData = this._getMonthFromCache(service, targetMonthKey);
+
+      // Instant render if cached
+      if (cachedMonthData && !isCurrentMonth) {
+        apiUsageList = cachedMonthData;
+        this._showChartLoading(false);
+      } else {
+        this._showChartLoading(true);
+
+        // Bidirectional Centered Window for past months
+        let fetchStart, fetchEnd;
+        if (isCurrentMonth) {
+          fetchStart = new Date(year, month - DAILY_FETCH_PREV_MONTHS, 1);
+          fetchEnd = new Date(year, month + 1, 0);
+        } else {
+          // Look 1 month behind, target month, and 2 months ahead
+          fetchStart = new Date(year, month - 1, 1);
+          const aheadMonth = month + 2;
+          fetchEnd = new Date(year, aheadMonth + 1, 0);
+          // Clamp forward to current month end
+          const currentMonthEnd = new Date(currentYear, currentMonth + 1, 0);
+          if (fetchEnd > currentMonthEnd) fetchEnd = currentMonthEnd;
+        }
+
+        if (fetchStart.getFullYear() < minYear) {
+          fetchStart.setFullYear(minYear, 0, 1);
+        }
+
+        startDateStr = `${fetchStart.getFullYear()}-${pad(fetchStart.getMonth() + 1)}-01`;
+        endDateStr = `${fetchEnd.getFullYear()}-${pad(fetchEnd.getMonth() + 1)}-${pad(fetchEnd.getDate())}`;
+
+        const rawBatch = await this._fetchGenesisUsage(service, startDateStr, endDateStr, "DAILY");
+        this._showChartLoading(false);
+
+        const byMonth = {};
+        for (const item of rawBatch) {
+          if (!item?.startDate) continue;
+          const mKey = item.startDate.slice(0, 7);
+          if (!byMonth[mKey]) byMonth[mKey] = [];
+          byMonth[mKey].push(item);
+        }
+
+        for (const [mKey, monthItems] of Object.entries(byMonth)) {
+          this._saveMonthToCache(service, mKey, monthItems);
+        }
+
+        apiUsageList = byMonth[targetMonthKey] || rawBatch;
+      }
+
+      // Schedule quiet idle pre-fetch for next block
+      this._scheduleBackgroundPrefetch(service, year, month);
     }
 
     const balSt = this._hass.states[this._resolveEntities().entity_balance];
@@ -2744,8 +3103,6 @@ class GenesisPowerShoutCard extends HTMLElement {
         if (k) psDateSet.add(k);
       }
     }
-
-    const apiUsageList = await this._fetchGenesisUsage(service, startDateStr, endDateStr, gran.toUpperCase());
 
     const apiLookup = new Map();
     for (const item of apiUsageList) {
@@ -2872,9 +3229,9 @@ class GenesisPowerShoutCard extends HTMLElement {
       }
     }
 
-    const svg = this._el("detailed-usage-svg");
+    const svg = this._el("usage-chart-svg");
     const chartWidth = 460;
-    const chartHeight = 205;
+    const chartHeight = 195;
     const leftPadding = 36;
     const bottomPadding = 38;
     const topMargin = 26;
@@ -2933,16 +3290,31 @@ class GenesisPowerShoutCard extends HTMLElement {
       }
 
       svgHtml += `
-        <rect x="${cx - colStep / 2}" y="0" width="${colStep}" height="${chartHeight}" fill="transparent" class="detail-col-hit" data-col="${idx}" style="cursor:pointer;" />
+        <rect x="${cx - colStep / 2}" y="0" width="${colStep}" height="${chartHeight}" fill="transparent" class="chart-col-hit" data-col="${idx}" style="cursor:pointer;" />
       `;
     });
 
     svg.innerHTML = svgHtml;
     this._currentDetailData = detailData;
+
+    // Render Historical Legend
+    const legend = this._el("usage-legend");
+    legend.innerHTML = `
+      <div class="legend-item">
+        <span class="legend-dot" style="background:${barColor}"></span>
+        <span>${escapeHtml(serviceLabel)}</span>
+      </div>
+      ${(this._hasPowerShout && service === "elec") ? `
+        <div class="legend-item">
+          ${PS_PIN_SVG}
+          <span>Power Shout</span>
+        </div>
+      ` : ''}
+    `;
+
     this._loadingDetail = false;
   }
 
-  // ── Render Summary Tab (Current Bill, Services, Tariffs) ──
   _updateSummary(entities) {
     const container = this._el("summary-content");
     if (!container) return;
@@ -2964,7 +3336,7 @@ class GenesisPowerShoutCard extends HTMLElement {
 
     let html = "";
 
-    // ── 1. Current Bill Card (From widget_bill_summary_v2) ──
+    // 1. Current Bill Card
     const billSum = billSummaryV2?.billSummary;
     if (billSum && billSum.totalAmountNzd != null) {
       const title = (billSum.totalAmountTitles && billSum.totalAmountTitles[0]) || "Amount due";
@@ -2998,7 +3370,7 @@ class GenesisPowerShoutCard extends HTMLElement {
       `;
     }
 
-    // ── 2. Service Usage Breakdown ──
+    // 2. Service Usage Breakdown
     const supplies = sidekick?.supplyTypesArea?.supplyTypes;
     if (Array.isArray(supplies) && supplies.length > 0) {
       html += `<div class="ctrl-label">Service Usage</div><div class="sum-card" style="padding:4px 14px;">`;
@@ -3013,7 +3385,7 @@ class GenesisPowerShoutCard extends HTMLElement {
       html += `</div>`;
     }
 
-    // ── 3. Bottled Gas (LPG) Section ──
+    // 3. Bottled Gas (LPG) Section
     if (lpgDetails && Object.keys(lpgDetails).length > 0) {
       html += `<div class="ctrl-label">Bottled Gas (LPG)</div>`;
       for (const spId of Object.keys(lpgDetails)) {
@@ -3047,7 +3419,7 @@ class GenesisPowerShoutCard extends HTMLElement {
       }
     }
 
-    // ── 4. Eco Tracker Widget ──
+    // 4. Eco Tracker Widget
     if (eco && eco.percentage != null) {
       html += `
         <div class="sum-card" style="display:flex;align-items:center;gap:12px;margin-top:12px;">
@@ -3059,7 +3431,7 @@ class GenesisPowerShoutCard extends HTMLElement {
       `;
     }
 
-    // ── 5. Active Plan Tariffs ──
+    // 5. Active Plan Tariffs
     if (plans && Array.isArray(plans.billingAccountSites)) {
       html += `<div class="ctrl-label">Active Plan Tariffs</div>`;
       for (const site of plans.billingAccountSites) {
