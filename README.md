@@ -92,10 +92,9 @@ The integration serves and auto-registers `powershout-card.js`. No separate scri
 ### Quick Start (Add to Dashboard)
 
 In your dashboard, click **Add Card**, search for **Genesis Energy - Power Shout & Account Card**, or select **Manual**, and paste:
-```yaml
-type: custom:genesisenergy-powershout-card
-Full Configuration Options
 
+Full Configuration Options
+```yaml
 type: custom:genesisenergy-powershout-card
 
 # --- Display & Behavior ---
@@ -103,6 +102,21 @@ title: "My Home"              # Custom card title override (default: "Genesis En
 show_powershout: auto         # 'auto' (detects eligibility), 'true' (force on), or 'false' (force off)
 default_tab: usage            # Tab to open by default: 'shout', 'usage', 'past', 'forecast', or 'summary'
 chart_days: 17                # Number of days in the top Recent Usage chart (default: 17)
+
+# --- Service Filtering ---
+# Hide subtabs/services from the Usage tab. Accepts a list or comma-separated string ('ev', 'gas', 'elec', 'recent')
+hidden_services:
+  - ev
+  # - gas
+
+# Alternatively, individual boolean toggles can be used:
+# show_ev: false              # Set false to hide EV subtab
+# show_gas: false             # Set false to hide Natural Gas subtab (also accepts: show_natural_gas)
+# show_elec: false            # Set false to hide Electricity subtab (also accepts: show_electricity)
+# show_recent: false          # Set false to hide the Recent billing cycle view
+
+# --- Cache / Debug (Optional) ---
+# clear_cache: true           # Automatically flushes client-side browser sessionStorage upon card load (useful for fixing incorrect data)
 
 # --- Entity ID Overrides (Optional - auto-discovered by default) ---
 entity_balance: sensor.genesis_energy_power_shout_balance
