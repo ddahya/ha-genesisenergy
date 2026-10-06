@@ -145,7 +145,7 @@ To add Genesis Energy data to your Home Assistant Energy Dashboard:
 
 ## 🛠️ Actions & Services
 
-This integration provides four actions/services to manage your account and statistics.
+This integration provides five actions/services to manage your account and statistics.
 
 ### 1. `genesisenergy.backfill_statistics`
 Imports historical usage data from Genesis into Home Assistant's long-term statistics database.
@@ -163,12 +163,24 @@ Books a Power Shout session directly from Home Assistant. Automatically detects 
 
 | Field | Type | Description | Example |
 | :--- | :--- | :--- | :--- |
-| `start_datetime` | `datetime` | **Required.** Local start date and time for the booking. | `"2026-08-15 18:00:00"` |
+| `start_datetime` | `datetime` | **Required.** Local start date and time for the booking (on the hour). | `"2026-08-15 18:00:00"` |
 | `duration_hours` | `integer` | **Required.** Duration in hours (1–4). | `1` |
 
 ---
 
-### 3. `genesisenergy.accept_powershout_offer`
+### 3. `genesisenergy.cancel_powershout_booking`
+Cancels an upcoming scheduled Power Shout session. Automatically resolves your loyalty account details to authorize the cancellation with Genesis.
+
+| Field | Type | Description | Example |
+| :--- | :--- | :--- | :--- |
+| `booking_id` | `string` | **Required.** The unique ID of the upcoming Power Shout booking to cancel. | `"12345678-abcd-1234-abcd-1234567890ab"` |
+
+> [!TIP]
+> **Usage Note:** You can view all upcoming booking IDs in the `bookings` attribute of `sensor.genesis_energy_power_shout_balance`. The companion Lovelace card calls this action automatically when you click the **Cancel** button on any booked session.
+
+---
+
+### 4. `genesisenergy.accept_powershout_offer`
 Accepts an available Power Shout offer using the offer GUID.
 
 | Field | Type | Description | Example |
@@ -180,13 +192,12 @@ Accepts an available Power Shout offer using the offer GUID.
 
 ---
 
-### 4. `genesisenergy.force_update`
+### 5. `genesisenergy.force_update`
 Triggers an immediate poll of the Genesis Energy API for all sensors.
 
 | Field | Type | Description | Example |
 | :--- | :--- | :--- | :--- |
 | `fuel_type` | `select` | **Required.** `electricity`, `gas`, or `both`. | `both` |
-
 
 ---
 
