@@ -115,23 +115,19 @@ async def ws_get_usage(hass: HomeAssistant, connection: websocket_api.ActiveConn
     end_date = msg["end_date"]
     interval = msg["interval_type"]
 
-    # 1. Check in-memory coordinator cache
     cache_key = f"{fuel}_{interval}_{start_date}_{end_date}"
     if cache_key in coordinator.usage_cache:
         connection.send_result(msg["id"], {"usage": coordinator.usage_cache[cache_key]})
         return
 
-    # 2. Date safety bounds
     today = dt_util.now().date()
     today_str = today.strftime("%Y-%m-%d")
 
     if interval == "MONTHLY":
-        # Full year bounds as expected by Genesis portal (e.g. 2026-01-01 to 2026-12-31)
         year = start_date[:4]
         start_date = f"{year}-01-01"
         end_date = f"{year}-12-31"
     else:
-        # DAILY / HOURLY: Never query future days past today (prevents 502 Bad Gateway)
         if start_date > today_str:
             connection.send_result(msg["id"], {"usage": []})
             return
@@ -207,19 +203,6 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             elif getattr(s, "_fuel_type", "") == "Gas": has_gas = True
         return has_elec, has_gas
 
-    def _resolve_billing_account_id() -> str | None:
-        ps_info = coordinator.data.get(DATA_API_POWERSHOUT_INFO)
-        if not ps_info or not isinstance(ps_info, dict):
-            return None
-        eligible_accounts = ps_info.get("eligibleBillingAccounts", [])
-        for account in eligible_accounts:
-            for site in account.get("billingAccountSites", []):
-                if site.get("isSelectedSite") is True:
-                    return account.get("id")
-        if eligible_accounts:
-            return eligible_accounts[0].get("id")
-        return None
-
     @callback
     async def async_add_powershout_booking_service(call: ServiceCall) -> None:
         start_dt_raw = call.data[ATTR_START_DATETIME]
@@ -258,7 +241,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             pass
 
         if not all([supply_agreement_id, supply_point_id, loyalty_account_id]):
-            LOGGER.error("Could not book Power Shout: Missing required IDs.")
+            LOGGER.error("Could not book Power Shout: Required IDs are missing.")
             async_create(
                 hass, "Could not book Power Shout: Required information is missing.",
                 title="Genesis Energy Power Shout Failed", notification_id="genesis_powershout_error"
@@ -266,6 +249,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             return
 
         successful_bookings = 0
+        booked_timestamps = []
         try:
             selected_date_for_vouchers = base_start_dt.astimezone(ZoneInfo("UTC")).strftime('%Y-%m-%dT00:00:00.000Z')
             voucher_data = await coordinator.api.get_powershout_vouchers_for_date(selected_date_for_vouchers, supply_point_id)
@@ -298,11 +282,15 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
                 if success:
                     successful_bookings += 1
+                    booked_timestamps.append(start_date_str)
                     await asyncio.sleep(0.5) 
                 else:
                     break
 
             if successful_bookings > 0:
+                # Record to persistent local store so past redeemed hours leave the list immediately
+                await coordinator.async_record_redeemed(booked_timestamps)
+
                 time_str = base_start_dt.strftime('%-I:%M %p')
                 async_create(
                     hass, f"Your {successful_bookings}-hour Power Shout starting at {time_str} has been booked.",
@@ -321,16 +309,16 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
     @callback
     async def async_cancel_powershout_booking_service(call: ServiceCall) -> None:
-        """Handle cancelling a Power Shout booking."""
+        """Handle cancelling a Power Shout booking using loyaltyAccountId."""
         booking_id = call.data[ATTR_BOOKING_ID]
-        billing_acc_id = _resolve_billing_account_id()
+        loyalty_acc_id = coordinator.get_loyalty_account_id()
 
-        if not billing_acc_id:
-            LOGGER.error("Cannot cancel booking: Billing account ID could not be resolved.")
+        if not loyalty_acc_id:
+            LOGGER.error("Cannot cancel booking: Loyalty account ID could not be resolved.")
             return
 
         try:
-            await coordinator.api.delete_powershout_booking(booking_id, billing_acc_id)
+            await coordinator.api.delete_powershout_booking(booking_id, loyalty_acc_id)
             async_create(
                 hass, "Your upcoming Power Shout booking has been cancelled.",
                 title="Genesis Energy Power Shout Cancelled",
@@ -354,7 +342,8 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             return
 
         target_offer = next((o for o in offers_data["activeOffers"] if o.get("loyaltyOffer", {}).get("guid") == offer_id), None)
-        if not target_offer: return
+        if not target_offer: 
+            return
             
         try:
             loyalty_account = target_offer['loyaltyAccount']
@@ -393,12 +382,17 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         has_elec, has_gas = get_available_services(coordinator)
         
         process_fuel = "none"
-        if requested_fuel == "electricity" and has_elec: process_fuel = "electricity"
-        elif requested_fuel == "gas" and has_gas: process_fuel = "gas"
+        if requested_fuel == "electricity" and has_elec: 
+            process_fuel = "electricity"
+        elif requested_fuel == "gas" and has_gas: 
+            process_fuel = "gas"
         elif requested_fuel == "both":
-            if has_elec and has_gas: process_fuel = "both"
-            elif has_elec: process_fuel = "electricity"
-            elif has_gas: process_fuel = "gas"
+            if has_elec and has_gas: 
+                process_fuel = "both"
+            elif has_elec: 
+                process_fuel = "electricity"
+            elif has_gas: 
+                process_fuel = "gas"
         
         if process_fuel != "none":
             hass.async_create_task(coordinator.async_backfill_statistics_data(days, process_fuel, force_overwrite))

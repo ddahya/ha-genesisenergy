@@ -1,13 +1,15 @@
 # custom_components/genesisenergy/coordinator.py
+
 from datetime import datetime, timedelta, timezone
 import asyncio
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any, Iterable
 from zoneinfo import ZoneInfo
 
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
 from homeassistant.helpers.device_registry import DeviceInfo
+from homeassistant.helpers.storage import Store
 from homeassistant.components.recorder.statistics import statistics_during_period
 from homeassistant.components.recorder import get_instance
 from homeassistant.util import dt as dt_util
@@ -19,18 +21,19 @@ from .const import (
     DEVICE_MANUFACTURER, DEVICE_MODEL, DATA_API_ELECTRICITY_USAGE, DATA_API_GAS_USAGE,
     DATA_API_POWERSHOUT_INFO, DATA_API_POWERSHOUT_BALANCE, DATA_API_POWERSHOUT_BOOKINGS,
     DATA_API_POWERSHOUT_OFFERS, DATA_API_POWERSHOUT_EXPIRING, DATA_API_POWERSHOUT_RECOMMENDED_HOURS,
-    DATA_API_BILLING_PLANS, DATA_API_WIDGET_HERO, DATA_API_WIDGET_BILLS_V2,
+    DATA_API_BILLING_PLANS, DATA_API_BILLING_SUMMARY, DATA_API_WIDGET_HERO, DATA_API_WIDGET_BILLS_V2,
     DATA_API_WIDGET_PROPERTY_LIST, DATA_API_WIDGET_PROPERTY_SWITCHER,
     DATA_API_WIDGET_SIDEKICK, DATA_API_WIDGET_DASHBOARD_POWERSHOUT,
     DATA_API_GENERATION_MIX_REALTIME, DATA_API_EV_PLAN_USAGE,
-    DATA_API_ELECTRICITY_FORECAST, DATA_API_LPG_DETAILS, DAILY_OVERWRITE_HOUR
+    DATA_API_ELECTRICITY_FORECAST, DATA_API_LPG_DETAILS, DAILY_OVERWRITE_HOUR,
+    REDEEMED_STORE_VERSION, REDEEMED_KEEP_DAYS
 )
 
 if TYPE_CHECKING:
     from .sensor import GenesisEnergyStatisticsSensor
 
 
-class GenesisEnergyDataUpdateCoordinator(DataUpdateCoordinator[dict[str, any]]):
+class GenesisEnergyDataUpdateCoordinator(DataUpdateCoordinator[dict[str, Any]]):
     config_entry: ConfigEntry
     api: GenesisEnergyApi
     device_info: DeviceInfo
@@ -38,8 +41,14 @@ class GenesisEnergyDataUpdateCoordinator(DataUpdateCoordinator[dict[str, any]]):
     def __init__(self, hass: HomeAssistant, entry: ConfigEntry) -> None:
         self.config_entry = entry
         self._current_options = dict(entry.options)
-        self.usage_cache: dict[str, any] = {}
+        self.usage_cache: dict[str, Any] = {}
         self._prefetched: bool = False
+
+        # Local storage for redeemed past hours
+        self._redeemed_store: Store = Store(
+            hass, REDEEMED_STORE_VERSION, f"{DOMAIN}_redeemed_hours_{entry.entry_id}"
+        )
+        self._redeemed_hours: set[str] | None = None
 
         def _on_token_updated(new_refresh_token: str):
             """Persist rotated 90-day refresh token quietly without triggering a reload."""
@@ -73,8 +82,57 @@ class GenesisEnergyDataUpdateCoordinator(DataUpdateCoordinator[dict[str, any]]):
         self._services_detected: bool = False
 
         super().__init__(hass, LOGGER, name=DOMAIN, update_interval=timedelta(hours=DEFAULT_SCAN_INTERVAL_HOURS))
-    
-    async def _async_update_data(self) -> dict[str, any]:
+
+    async def _async_redeemed_hours(self) -> set[str]:
+        """Return past hours redeemed through this integration."""
+        if self._redeemed_hours is None:
+            stored = await self._redeemed_store.async_load()
+            hours = stored.get("hours") if isinstance(stored, dict) else None
+            self._redeemed_hours = set(hours) if isinstance(hours, list) else set()
+        return self._redeemed_hours
+
+    async def async_record_redeemed(self, starts: Iterable[str]) -> None:
+        """Record redeemed past hours so they leave the ranked list immediately."""
+        hours = await self._async_redeemed_hours()
+        added = {str(val).replace("Z", "").split(".")[0] for val in starts if val}
+        if not added:
+            return
+        hours.update(added)
+        cutoff = (dt_util.now().date() - timedelta(days=REDEEMED_KEEP_DAYS)).isoformat()
+        self._redeemed_hours = {v for v in hours if v[:10] >= cutoff}
+        await self._redeemed_store.async_save({"hours": sorted(list(self._redeemed_hours))})
+        LOGGER.debug("Recorded %d redeemed hours to local store (total stored: %d)", len(added), len(self._redeemed_hours))
+
+    def _booked_hour_starts(self, bookings_data: Any) -> set[str]:
+        """Return timestamps already covered by existing bookings."""
+        if not isinstance(bookings_data, dict):
+            return set()
+        bookings = bookings_data.get("bookings")
+        if not isinstance(bookings, list):
+            return set()
+        starts = set()
+        for b in bookings:
+            if isinstance(b, dict) and b.get("startDateTime"):
+                s = str(b["startDateTime"]).replace("Z", "").split(".")[0]
+                starts.add(s)
+                try:
+                    dur = max(1, int(float(b.get("duration") or 1)))
+                    dt = datetime.fromisoformat(s)
+                    for offset in range(dur):
+                        starts.add((dt + timedelta(hours=offset)).strftime("%Y-%m-%dT%H:%M:%S"))
+                        starts.add((dt + timedelta(hours=offset)).strftime("%Y-%m-%d %H:%M:%S"))
+                except Exception:
+                    pass
+        return starts
+
+    def get_loyalty_account_id(self) -> str | None:
+        """Extract the loyalty account ID required by Genesis for booking operations."""
+        ps_info = self.data.get(DATA_API_POWERSHOUT_INFO) if self.data else None
+        if ps_info and isinstance(ps_info, dict):
+            return ps_info.get("loyaltyAccountId")
+        return None
+
+    async def _async_update_data(self) -> dict[str, Any]:
         try:
             data = await self._async_fetch_all_data()
             if not self._prefetched:
@@ -92,16 +150,14 @@ class GenesisEnergyDataUpdateCoordinator(DataUpdateCoordinator[dict[str, any]]):
         year = now.year
         month = now.month
         
-        # 1. Current Year Monthly bounds
         m_start = f"{year}-01-01"
         m_end = f"{year}-12-31"
 
-        # 2. Current Month Daily bounds (clamped to today)
         d_start = f"{year}-{month:02d}-01"
         d_end = now.strftime("%Y-%m-%d")
 
         LOGGER.debug("Starting background pre-fetch of current year usage data...")
-        await asyncio.sleep(2)  # Yield to allow startup to finish smoothly
+        await asyncio.sleep(2)
 
         tasks = [
             ("elec_monthly", self.api.get_energy_data_for_period, m_start, m_end, "MONTHLY"),
@@ -121,7 +177,7 @@ class GenesisEnergyDataUpdateCoordinator(DataUpdateCoordinator[dict[str, any]]):
                     cache_key = f"{fuel}_{gran}_{args[0]}_{args[1]}"
                     self.usage_cache[cache_key] = res.get("usage", [])
                     LOGGER.debug("Pre-fetched and cached %s data (%d items)", key, len(res.get("usage", [])))
-                await asyncio.sleep(0.4)  # Prevent burst rate limits
+                await asyncio.sleep(0.4)
             except Exception as e:
                 LOGGER.debug("Background pre-fetch skipped for %s: %s", key, e)
 
@@ -151,7 +207,7 @@ class GenesisEnergyDataUpdateCoordinator(DataUpdateCoordinator[dict[str, any]]):
             self.has_electricity, self.has_gas, self.has_ev_plan, self.has_powershout
         )
 
-    async def _async_fetch_all_data(self) -> dict[str, any]:
+    async def _async_fetch_all_data(self) -> dict[str, Any]:
         """Fetch targeted API data with concurrency bounds to prevent 502 drops."""
         days_for_regular_fetch = 4
         semaphore = asyncio.Semaphore(8)
@@ -166,8 +222,9 @@ class GenesisEnergyDataUpdateCoordinator(DataUpdateCoordinator[dict[str, any]]):
 
         tasks = []
 
-        # 1. Base Core & Plan Calls
+        # 1. Base Core, Summary & Plan Calls
         tasks.append(_fetch_task(DATA_API_BILLING_PLANS, self.api.get_billing_plans))
+        tasks.append(_fetch_task(DATA_API_BILLING_SUMMARY, self.api.get_billing_summary))
         tasks.append(_fetch_task(DATA_API_WIDGET_BILLS_V2, self.api.get_widget_bill_summary_v2))
         tasks.append(_fetch_task(DATA_API_GENERATION_MIX_REALTIME, self.api.get_generation_mix_realtime))
         tasks.append(_fetch_task(DATA_API_WIDGET_HERO, self.api.get_widget_hero_info))
@@ -213,7 +270,7 @@ class GenesisEnergyDataUpdateCoordinator(DataUpdateCoordinator[dict[str, any]]):
         if bill_v2 and isinstance(bill_v2, dict) and bill_v2.get("billEstimated"):
             fetched_data[DATA_API_WIDGET_SIDEKICK] = bill_v2.get("billEstimated")
 
-        # 6. Fetch Top Recommended Past Power Shout Hours
+        # 6. Fetch & Filter Top Recommended Past Power Shout Hours
         ps_info = fetched_data.get(DATA_API_POWERSHOUT_INFO)
         if ps_info and isinstance(ps_info, dict):
             loyalty_id = ps_info.get("loyaltyAccountId")
@@ -253,6 +310,21 @@ class GenesisEnergyDataUpdateCoordinator(DataUpdateCoordinator[dict[str, any]]):
                         icp_number=selected_sp_id,
                         supply_agreement_id=selected_sa_id
                     )
+                    
+                    # Filter out already redeemed or booked hours
+                    if rec_hours and isinstance(rec_hours, dict) and "recommendedHours" in rec_hours:
+                        redeemed = await self._async_redeemed_hours()
+                        booked = self._booked_hour_starts(fetched_data.get(DATA_API_POWERSHOUT_BOOKINGS))
+                        filtered = []
+                        for r in rec_hours.get("recommendedHours", []):
+                            dt_str = str(r.get("dateTime", "")).replace("Z", "").split(".")[0]
+                            dt_space = dt_str.replace("T", " ")
+                            if dt_str in redeemed or dt_space in redeemed or dt_str in booked or dt_space in booked:
+                                continue
+                            filtered.append(r)
+                        rec_hours = dict(rec_hours)
+                        rec_hours["recommendedHours"] = filtered
+
                     fetched_data[DATA_API_POWERSHOUT_RECOMMENDED_HOURS] = rec_hours
                 except Exception as err:
                     LOGGER.debug("Could not fetch recommended Power Shout hours: %s", err)
