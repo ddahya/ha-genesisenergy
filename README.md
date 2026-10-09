@@ -17,7 +17,7 @@ A custom integration for Home Assistant to connect with Genesis Energy (New Zeal
 * 🛠️ **Automatic Data Correction (Options Flow):**
   * Built-in option to schedule a daily automatic statistic overwrite after 1:00 PM to fix delayed or missing hourly data reported by Genesis.
 * 🎁 **Advanced Power Shout Management:**
-  * Sensors for **Eligibility**, **Balance (Hours)**, and **Offers Available** (`binary_sensor.genesis_energy_power_shout_offers_available`).
+  * Sensors for **Eligibility**, **Balance (Hours)**, and **Offers Available**.
   * **Retroactive Bookings:** Book free Power Shout hours for past dates (up to 31 days prior).
   * **Top 5 Recommended Past Hours:** Exposes `recommended_hours`, `recommended_hours_count`, and `top_recommended_hour` attributes on your balance sensor, pinpointing the highest-cost hours to redeem for maximum savings.
 * 🌿 **Real-Time Eco Tracker:**
@@ -75,10 +75,34 @@ A custom integration for Home Assistant to connect with Genesis Energy (New Zeal
 4. If prompted for two-step verification, enter the code sent to your email.
 5. Click **Submit**.
 
+
 ### Integration Options (Auto-Correction)
 1. Go to **Settings > Devices & Services > Genesis Energy**.
 2. Click **Configure**.
 3. Toggle **Enable Auto-Correction**. When enabled, the integration performs a daily statistics check after 1:00 PM to correct any delayed or revised hourly data reported by Genesis.
+---
+
+## 🚀 First-Time Setup (Energy Dashboard & Historical Data)
+
+Upon initial installation, the integration retrieves the last **4 days** of recent interval data to initialise your account sensors. It does not automatically import deep historical data giving you full control over how much historical data you want to import into Home Assistant's Long-Term Statistics database.
+
+**To populate your Energy Dashboard history:**
+
+1. **Want full historical data? (Recommended)**
+   * Go to **Developer Tools** → **Actions** (or Services).
+   * Call `genesisenergy.backfill_statistics` with:
+     * `fuel_type: both` (or `electricity` / `gas`)
+     * `days_to_fetch`: Set to your preferred history length (e.g., `365` for a full year, up to `730` for 2 years).
+   * *This establishes your cumulative baseline without midnight spikes and creates an accurate historical archive of your Genesis data.*
+
+2. **Only require recent data?**
+   * If you do not need past historical records, you don't need to run a backfill. 
+   * Calling `genesisenergy.force_update` or waiting for the next scheduled poll will import the rolling 4-day window into your Energy Dashboard, which will continue accumulating daily going forward.
+
+> [!TIP]
+> **Backfill Note:** Depending on how many days you request, a full year backfill can take 30–60 seconds to process. You can monitor progress in **Settings** → **System** → **Logs**.
+
+---
 
 ## 🎴 The Custom Lovelace Card
 
@@ -135,9 +159,9 @@ To add Genesis Energy data to your Home Assistant Energy Dashboard:
 
 1. Go to **Settings > Dashboards > Energy**.
 2. Under **Electricity Grid**, click **Add Consumption** and select:
-   * `Genesis Electricity Consumption Daily` (`sensor.genesis_energy_electricity_consumption_daily`)
+   * `Genesis Electricity Consumption Daily`
 3. Under **Gas Consumption**, click **Add Gas Source** and select:
-   * `Genesis Gas Consumption Daily` (`sensor.genesis_energy_gas_consumption_daily`)
+   * `Genesis Gas Consumption Daily`
 
 ---
 
@@ -167,7 +191,7 @@ Books a Power Shout session directly from Home Assistant. Automatically detects 
 ---
 
 ### 3. `genesisenergy.cancel_powershout_booking`
-Cancels an upcoming scheduled Power Shout session. Automatically resolves your loyalty account details to authorize the cancellation with Genesis.
+Cancels an upcoming scheduled Power Shout session. Automatically resolves your loyalty account details to authorise the cancellation with Genesis.
 
 | Field | Type | Description | Example |
 | :--- | :--- | :--- | :--- |
