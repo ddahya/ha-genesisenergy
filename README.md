@@ -115,10 +115,13 @@ The integration serves and auto-registers `powershout-card.js`. No separate scri
 
 In your dashboard, click **Add Card**, search for **Genesis Energy - Power Shout & Account Card**, or select **Manual**, and paste:
 
-Full Configuration Options
 ```yaml
 type: custom:genesisenergy-powershout-card
+```
+The card **auto-discovers** your Genesis entities for your active property with no further configuration required.
 
+Full Configuration Options
+```yaml
 # --- Display & Behavior ---
 title: "My Home"              # Custom card title override (default: "Genesis Energy")
 show_powershout: auto         # 'auto' (detects eligibility), 'true' (force on), or 'false' (force off)
