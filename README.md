@@ -34,8 +34,6 @@ A custom integration for Home Assistant to connect with Genesis Energy (New Zeal
 * ⚡ **Electricity Forecast Sensors:**
   * Exposes `Today's Forecast Usage (kWh)` and `Today's Forecast Cost ($)`.
   * Extra attributes provide predicted high/low ranges and full 7-day forecast data.
-* 🏷️ **Usage Breakdown Sensors:**
-  * Categorizes electricity consumption by `Appliances`, `Electronics`, `Lighting`, and `Other` (in kWh).
 * 🔒 **Modern Architecture & Concurrency:**
   * **Azure AD B2C with PKCE:** Secure authentication with permanent 90-day background token rotation—no session drops or verification code prompts on restart.
   * **Two-Step Verification:** Built-in fallback flow in Home Assistant if Genesis requests a two-step code.
