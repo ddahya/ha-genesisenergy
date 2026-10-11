@@ -117,29 +117,24 @@ async def ws_get_usage(hass: HomeAssistant, connection: websocket_api.ActiveConn
 
     today = dt_util.now().date()
     today_str = today.strftime("%Y-%m-%d")
-    current_month_start = f"{today.year}-{today.month:02d}-01"
 
-    is_current_period_query = (
-        (interval == "MONTHLY" and start_date == f"{today.year}-01-01") or
-        (interval == "DAILY" and start_date == current_month_start)
-    )
+    # A query is live/ongoing if its end date reaches today/future, or if monthly for the current year
+    is_ongoing = (interval == "MONTHLY" and start_date.startswith(str(today.year))) or (end_date >= today_str)
 
-    norm_key = f"{fuel}_{interval}_current"
-    if is_current_period_query and norm_key in coordinator.usage_cache:
-        connection.send_result(msg["id"], {"usage": coordinator.usage_cache[norm_key]})
-        return
-
+    # 1. Check in-memory coordinator cache for completed past historical queries
     cache_key = f"{fuel}_{interval}_{start_date}_{end_date}"
-    if not is_current_period_query and cache_key in coordinator.usage_cache:
+    if not is_ongoing and cache_key in coordinator.usage_cache:
         connection.send_result(msg["id"], {"usage": coordinator.usage_cache[cache_key]})
         return
 
-    if interval == "DAILY" and not is_current_period_query:
+    # 2. Check persistent local vault for past daily data before making cloud calls
+    if interval == "DAILY" and not is_ongoing and hasattr(coordinator, "get_vault_days"):
         vault_days = coordinator.get_vault_days(fuel, start_date, end_date)
         if vault_days and len(vault_days) >= 25:
             connection.send_result(msg["id"], {"usage": vault_days})
             return
 
+    # 3. Date boundary adjustments
     if interval == "MONTHLY":
         year = start_date[:4]
         start_date = f"{year}-01-01"
@@ -166,16 +161,17 @@ async def ws_get_usage(hass: HomeAssistant, connection: websocket_api.ActiveConn
         else:
             usage_list = []
 
-        if interval == "DAILY" and usage_list:
+        # Archive newly retrieved daily readings into permanent local vault
+        if interval == "DAILY" and usage_list and hasattr(coordinator, "async_save_usage_to_vault"):
             await coordinator.async_save_usage_to_vault(fuel, usage_list)
-            if fuel == "ev":
+            # For EV, retrieve the full accumulated vault so purged historical days are included
+            if fuel == "ev" and hasattr(coordinator, "get_vault_days"):
                 accumulated = coordinator.get_vault_days("ev", start_date, end_date)
                 if accumulated:
                     usage_list = accumulated
 
-        if is_current_period_query:
-            coordinator.usage_cache[norm_key] = usage_list
-        else:
+        # Store in coordinator memory cache only for completed historical queries
+        if not is_ongoing:
             coordinator.usage_cache[cache_key] = usage_list
 
         connection.send_result(msg["id"], {"usage": usage_list})
@@ -185,7 +181,7 @@ async def ws_get_usage(hass: HomeAssistant, connection: websocket_api.ActiveConn
 
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """Set up Genesis Energy from a config entry."""
-    LOGGER.info(f"Setting up Genesis Energy for entry: {entry.title}...")
+    LOGGER.info("Setting up Genesis Energy for entry: %s...", entry.title)
 
     hass.data.setdefault(DOMAIN, {})
     coordinator = GenesisEnergyDataUpdateCoordinator(hass, entry)
@@ -194,10 +190,10 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     try:
         await coordinator.async_config_entry_first_refresh()
     except ConfigEntryNotReady:
-        LOGGER.error(f"Initial data fetch failed for {entry.title}. Retrying setup.")
+        LOGGER.error("Initial data fetch failed for %s. Retrying setup.", entry.title)
         raise
     except Exception as e:
-        LOGGER.error(f"Unexpected error during first refresh for {entry.title}: {e}", exc_info=True)
+        LOGGER.error("Unexpected error during first refresh for %s: %s", entry.title, e, exc_info=True)
         raise ConfigEntryNotReady(f"Initial data fetch failed with an unexpected error: {e}") from e
 
     LOGGER.info("Setting up platforms...")
@@ -233,8 +229,10 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         has_elec = getattr(coord, "has_electricity", True)
         has_gas = getattr(coord, "has_gas", False)
         for s in getattr(coord, "statistics_sensors", []):
-            if getattr(s, "_fuel_type", "") == "Electricity": has_elec = True
-            elif getattr(s, "_fuel_type", "") == "Gas": has_gas = True
+            if getattr(s, "_fuel_type", "") == "Electricity": 
+                has_elec = True
+            elif getattr(s, "_fuel_type", "") == "Gas": 
+                has_gas = True
         return has_elec, has_gas
 
     @callback
@@ -399,7 +397,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
                 )
                 await coordinator.async_request_refresh()
         except Exception as e:
-            LOGGER.exception(f"Error accepting Power Shout offer: {e}")
+            LOGGER.exception("Error accepting Power Shout offer: %s", e)
 
     hass.services.async_register(
         DOMAIN, SERVICE_ACCEPT_POWERSHOUT_OFFER,
@@ -438,6 +436,8 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
     @callback
     async def async_force_update_service(call: ServiceCall) -> None:
+        """Force update coordinator and purge server-side usage cache."""
+        coordinator.usage_cache.clear()
         await coordinator.async_request_refresh()
 
     hass.services.async_register(
@@ -456,7 +456,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     entry.async_on_unload(_unload_services)
     entry.async_on_unload(entry.add_update_listener(async_update_options))
 
-    LOGGER.info(f"Genesis Energy setup complete for {entry.data[CONF_EMAIL]} ✅")
+    LOGGER.info("Genesis Energy setup complete for %s ✅", entry.data[CONF_EMAIL])
     return True
 
 async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:

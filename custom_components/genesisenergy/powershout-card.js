@@ -4,11 +4,8 @@
 const CARD_VERSION = "2.0.1";
 const DOMAIN = "genesisenergy";
 
-
+// Number of previous months to fetch in one batch for the daily chart (3 or 2)
 const DAILY_FETCH_PREV_MONTHS = 3;
-const EV_START_YEAR = 2026;
-const EV_START_MONTH = 8; 
-const LIVE_DATA_CACHE_TTL_MS = 4 * 60 * 60 * 1000;
 
 const TAB_SHOUT = "shout";
 const TAB_USAGE = "usage";
@@ -130,7 +127,7 @@ const PS_PIN_SVG = `
   <svg width="13" height="16" viewBox="0 0 16 20" fill="none" style="vertical-align:-2px;flex-shrink:0;">
     <circle cx="8" cy="8" r="8" fill="var(--genesis-orange)"/>
     <path d="M 5 13 L 8 19 L 11 13 Z" fill="var(--genesis-orange)"/>
-    <text x="8" y="11.2" text-anchor="middle" fill="#ffffff" font-size="9" font-weight="900" font-family="-apple-system, sans-serif">P</text>
+    <text x="8" y="11.2" text-anchor="middle" fill="#ffffff" font-size="9" font-weight="900" font-family="-apple-system, BlinkMacSystemFont, sans-serif">P</text>
   </svg>
 `;
 
@@ -143,9 +140,6 @@ const CARD_CSS = `
     --genesis-plum-light: #8e24aa;
     --genesis-teal: #00838f;
     --genesis-yellow: #e8a13c;
-    --live-banner-bg: var(--genesis-orange);
-    --offer-banner-border: var(--genesis-yellow);
-    --expiring-banner-border: var(--genesis-yellow);
     --genesis-card-bg: var(--ha-card-background, var(--card-background-color, #1a1612));
     --genesis-text: var(--primary-text-color, #ffffff);
     --genesis-muted: var(--secondary-text-color, #9e948a);
@@ -327,7 +321,7 @@ const CARD_CSS = `
 
   .live {
     align-items: center;
-    background: var(--live-banner-bg);
+    background: var(--genesis-orange);
     border-radius: 12px;
     color: #fff;
     display: flex;
@@ -336,8 +330,7 @@ const CARD_CSS = `
     justify-content: space-between;
     margin-top: 12px;
     padding: 11px 13px;
-    box-shadow: 0 0 16px 2px var(--live-banner-bg);
-    animation: pulse-glow-live 2s ease-in-out infinite;
+    animation: pulse-glow-orange 2s ease-in-out infinite;
   }
   .live .ll { align-items: center; display: flex; gap: 8px; }
   .live .dot {
@@ -348,32 +341,32 @@ const CARD_CSS = `
     width: 9px;
   }
   @keyframes pulse { 0%,100% { opacity: 1; transform: scale(1); } 50% { opacity: .3; transform: scale(.8); } }
-  @keyframes pulse-glow-live {
-    0% { filter: brightness(1); }
-    50% { filter: brightness(1.12); }
-    100% { filter: brightness(1); }
+  @keyframes pulse-glow-orange {
+    0% { box-shadow: 0 0 0 0 rgba(241, 91, 41, 0.7); filter: brightness(1); }
+    50% { box-shadow: 0 0 16px 5px rgba(241, 91, 41, 0.55); filter: brightness(1.08); }
+    100% { box-shadow: 0 0 0 0 rgba(241, 91, 41, 0); filter: brightness(1); }
   }
 
   .offer {
     align-items: center;
     background: rgba(232, 161, 60, 0.12);
-    border: 1.8px dashed var(--offer-banner-border);
+    border: 1.8px dashed var(--genesis-yellow);
     border-radius: 14px;
     display: flex;
     gap: 10px;
     justify-content: space-between;
     margin-top: 12px;
     padding: 12px 14px;
-    animation: pulse-glow-offer 2.2s ease-in-out infinite;
+    animation: pulse-glow-yellow 2.2s ease-in-out infinite;
   }
-  .offer .ot { color: var(--offer-banner-border); font-size: 13.5px; font-weight: 700; }
+  .offer .ot { color: var(--genesis-yellow); font-size: 13.5px; font-weight: 700; }
   .offer .ot b { color: var(--genesis-orange); font-size: 15px; }
   .offer .add-btn {
     appearance: none;
-    background: var(--offer-banner-border);
+    background: var(--genesis-yellow);
     border: 0;
     border-radius: 11px;
-    color: #1a1612;
+    color: #3a2606;
     cursor: pointer;
     flex: none;
     font: inherit;
@@ -384,16 +377,16 @@ const CARD_CSS = `
     transition: filter .2s;
   }
   .offer .add-btn:hover { filter: brightness(1.1); }
-  @keyframes pulse-glow-offer {
-    0% { filter: brightness(1); }
-    50% { filter: brightness(1.1); }
-    100% { filter: brightness(1); }
+  @keyframes pulse-glow-yellow {
+    0% { box-shadow: 0 0 0 0 rgba(232, 161, 60, 0.75); border-color: rgba(232, 161, 60, 0.8); background-color: rgba(232, 161, 60, 0.12); }
+    50% { box-shadow: 0 0 18px 6px rgba(232, 161, 60, 0.5); border-color: #ffd54f; background-color: rgba(232, 161, 60, 0.24); }
+    100% { box-shadow: 0 0 0 0 rgba(232, 161, 60, 0); border-color: rgba(232, 161, 60, 0.8); background-color: rgba(232, 161, 60, 0.12); }
   }
 
   .expiring-bar {
     align-items: center;
     background: rgba(232, 161, 60, 0.14);
-    border: 1.5px solid var(--expiring-banner-border);
+    border: 1.5px solid var(--genesis-yellow);
     border-radius: 12px;
     color: var(--genesis-text);
     display: flex;
@@ -416,10 +409,9 @@ const CARD_CSS = `
   .tabs {
     border-bottom: 1px solid var(--genesis-border);
     display: flex;
-    align-items: center;
     gap: 2px;
     margin: 14px -16px 0;
-    padding: 0 12px;
+    padding: 0 10px;
     overflow-x: auto;
     scrollbar-width: none;
   }
@@ -457,10 +449,26 @@ const CARD_CSS = `
     line-height: 1;
     padding: 2px 6px;
   }
+  .panel { padding-top: 4px; }
 
-  /* Top Tabs Meter Status Pill (Far Right) */
-  .main-sync-badge {
-    margin-left: auto;
+  .usage-header-row {
+    display: flex;
+    justify-content: space-between;
+    align-items: baseline;
+    margin-top: 8px;
+    padding-bottom: 6px;
+    border-bottom: 1px solid var(--genesis-border);
+    gap: 8px;
+    flex-wrap: wrap;
+  }
+  .usage-title {
+    color: var(--genesis-plum);
+    font-size: 15px;
+    font-weight: 900;
+    letter-spacing: .06em;
+    text-transform: uppercase;
+  }
+  .usage-sync-pill {
     font-size: 11.5px;
     font-weight: 600;
     color: var(--genesis-muted);
@@ -469,10 +477,8 @@ const CARD_CSS = `
     align-items: center;
     gap: 5px;
     white-space: nowrap;
-    padding-left: 6px;
-    flex-shrink: 0;
   }
-  .main-sync-badge strong {
+  .usage-sync-pill strong {
     color: var(--genesis-text);
     font-weight: 700;
   }
@@ -490,89 +496,12 @@ const CARD_CSS = `
   .usage-sync-dot.stalled {
     background: #ff5252;
   }
-  @media (max-width: 440px) {
-    .main-sync-badge .sync-text-prefix { display: none; }
-  }
-
-  .panel { padding-top: 4px; }
-
-  .detailed-usage-card {
-    background: var(--genesis-surface);
-    border: 1px solid var(--genesis-border);
-    border-radius: 16px;
-    padding: 14px;
-    margin-top: 10px;
-    position: relative;
-  }
-  .service-subtabs-row {
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
-    border-bottom: 1.5px solid var(--genesis-border);
-    padding-bottom: 4px;
-    margin-bottom: 12px;
-    gap: 8px;
-  }
-  .service-subtabs {
-    display: flex;
-    gap: 6px;
-    overflow-x: auto;
-    scrollbar-width: none;
-  }
-  .service-subtabs::-webkit-scrollbar { display: none; }
-  .service-subtabs button {
-    appearance: none;
-    background: none;
-    border: 0;
-    border-bottom: 3px solid transparent;
-    color: var(--genesis-muted);
-    cursor: pointer;
-    font: inherit;
-    font-size: 13.5px;
-    font-weight: 700;
-    padding: 6px 10px;
-    margin-bottom: -5.5px;
-    white-space: nowrap;
-    transition: all .2s;
-  }
-  .service-subtabs button.sel {
-    border-bottom-color: var(--genesis-orange);
-    color: var(--genesis-text);
-  }
-
-  /* Submenu Targeted Sync Button */
-  .sync-action-btn {
-    appearance: none;
-    background: var(--genesis-surface);
-    border: 1px solid var(--genesis-border);
-    border-radius: 8px;
-    color: var(--genesis-muted);
-    cursor: pointer;
-    font: inherit;
-    font-size: 11.5px;
-    font-weight: 700;
-    padding: 3px 8px;
-    display: inline-flex;
-    align-items: center;
-    gap: 4px;
-    transition: all .2s;
-    flex-shrink: 0;
-    margin-bottom: 2px;
-  }
-  .sync-action-btn:hover {
-    color: var(--genesis-orange);
-    border-color: var(--genesis-orange);
-  }
-  .sync-action-btn.syncing .sync-icon {
-    animation: spin .7s linear infinite;
-    color: var(--genesis-orange);
-  }
 
   .usage-metrics-row {
     display: flex;
     justify-content: space-between;
     align-items: baseline;
-    margin: 4px 2px 4px;
+    margin: 12px 2px 4px;
   }
   .usage-metric-box {
     display: flex;
@@ -587,7 +516,179 @@ const CARD_CSS = `
     font-weight: 700;
     color: var(--genesis-muted);
     letter-spacing: .02em;
-    margin-bottom: 8px;
+    margin-bottom: 10px;
+  }
+
+  .chart-container {
+    width: 100%;
+    margin-top: 8px;
+    position: relative;
+    user-select: none;
+  }
+  .chart-svg {
+    width: 100%;
+    height: 195px;
+    overflow: visible;
+  }
+  .chart-grid-line {
+    stroke: var(--genesis-border);
+    stroke-dasharray: 4, 4;
+    stroke-width: 1;
+  }
+  .chart-axis-text {
+    fill: var(--genesis-muted);
+    font-size: 11px;
+    font-weight: 600;
+  }
+  .chart-timeline-track {
+    background: var(--genesis-border);
+    border-radius: 4px;
+    height: 6px;
+    margin: 6px 0 14px 34px;
+    overflow: hidden;
+  }
+  .chart-timeline-fill {
+    background: var(--genesis-track);
+    height: 100%;
+    border-radius: 4px;
+  }
+
+  .chart-tooltip {
+    position: absolute;
+    background: rgba(226, 213, 236, 0.94);
+    color: #4a0d46;
+    backdrop-filter: blur(8px);
+    -webkit-backdrop-filter: blur(8px);
+    border: 1px solid rgba(74, 13, 70, 0.22);
+    border-radius: 10px;
+    padding: 8px 12px;
+    box-shadow: 0 10px 30px rgba(0,0,0,0.32);
+    pointer-events: none;
+    z-index: 150;
+    min-width: 155px;
+    max-width: 215px;
+    opacity: 0;
+    transform: translateY(4px);
+    transition: opacity .15s ease, transform .15s ease;
+  }
+  .chart-tooltip.visible {
+    opacity: 1;
+    transform: translateY(0);
+  }
+  :host(.theme-dark) .chart-tooltip {
+    background: rgba(38, 22, 42, 0.93);
+    color: #f3e5f5;
+    border-color: rgba(186, 104, 200, 0.38);
+    box-shadow: 0 12px 34px rgba(0,0,0,0.65);
+  }
+
+  .tip-date-row {
+    display: flex;
+    justify-content: space-between;
+    align-items: baseline;
+    font-size: 12.5px;
+    font-weight: 800;
+    color: #4a0d46;
+    margin-bottom: 5px;
+    gap: 8px;
+    white-space: nowrap;
+  }
+  :host(.theme-dark) .tip-date-row { color: #e1bee7; }
+
+  .tip-kwh { font-size: 12px; font-weight: 800; color: #5d1757; }
+  :host(.theme-dark) .tip-kwh { color: #ce93d8; }
+
+  .tip-row {
+    display: flex;
+    justify-content: space-between;
+    font-size: 12px;
+    font-weight: 600;
+    color: #4a0d46;
+    margin: 2px 0;
+  }
+  :host(.theme-dark) .tip-row { color: #ede7f6; }
+
+  .tip-divider {
+    border-top: 1px solid rgba(74, 13, 70, 0.22);
+    margin: 5px 0;
+  }
+  :host(.theme-dark) .tip-divider { border-top-color: rgba(186, 104, 200, 0.25); }
+
+  .tip-row.total { font-weight: 800; font-size: 12.5px; }
+
+  .tip-ps-badge {
+    background: rgba(241, 91, 41, 0.16);
+    border: 1px solid rgba(241, 91, 41, 0.4);
+    border-radius: 6px;
+    color: #c94013;
+    font-size: 10.5px;
+    font-weight: 800;
+    margin-top: 5px;
+    padding: 3px 5px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 4px;
+  }
+  :host(.theme-dark) .tip-ps-badge {
+    background: rgba(241, 91, 41, 0.22);
+    border-color: rgba(241, 91, 41, 0.55);
+    color: #ff8a65;
+  }
+
+  .tip-drilldown {
+    font-size: 10.5px;
+    font-weight: 800;
+    color: var(--genesis-plum);
+    margin-top: 6px;
+    text-align: center;
+    border-top: 1px dashed rgba(74, 13, 70, 0.25);
+    padding-top: 5px;
+  }
+  :host(.theme-dark) .tip-drilldown {
+    color: #ba68c8;
+    border-top-color: rgba(186, 104, 200, 0.3);
+  }
+
+  .detailed-usage-card {
+    background: var(--genesis-surface);
+    border: 1px solid var(--genesis-border);
+    border-radius: 16px;
+    padding: 14px;
+    margin-top: 18px;
+    position: relative;
+  }
+  .service-subtabs-row {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    border-bottom: 1.5px solid var(--genesis-border);
+    padding-bottom: 4px;
+    margin-bottom: 12px;
+    gap: 8px;
+    flex-wrap: wrap;
+  }
+  .service-subtabs {
+    display: flex;
+    gap: 8px;
+  }
+  .service-subtabs button {
+    appearance: none;
+    background: none;
+    border: 0;
+    border-bottom: 3px solid transparent;
+    color: var(--genesis-muted);
+    cursor: pointer;
+    font: inherit;
+    font-size: 13.5px;
+    font-weight: 700;
+    padding: 6px 10px;
+    margin-bottom: -5.5px;
+    transition: all .2s;
+  }
+  .service-subtabs button.sel {
+    border-bottom-color: var(--genesis-orange);
+    color: var(--genesis-text);
   }
 
   .analytics-toolbar {
@@ -595,7 +696,7 @@ const CARD_CSS = `
     justify-content: space-between;
     align-items: center;
     gap: 8px;
-    margin-bottom: 12px;
+    margin-bottom: 14px;
   }
   .granularity-pill {
     background: var(--genesis-card-bg);
@@ -666,7 +767,7 @@ const CARD_CSS = `
     justify-content: center;
     align-items: center;
     gap: 10px;
-    margin-bottom: 12px;
+    margin-bottom: 14px;
     position: relative;
   }
   .date-nav-btn {
@@ -768,188 +869,12 @@ const CARD_CSS = `
     cursor: not-allowed;
   }
 
-  .date-popover-footer {
-    margin-top: 10px;
-    padding-top: 8px;
-    border-top: 1px solid var(--genesis-border);
-    display: flex;
-    justify-content: center;
-  }
-  .date-popover-clear-btn {
-    appearance: none;
-    background: none;
-    border: 1px dashed var(--genesis-border);
-    border-radius: 8px;
-    color: var(--genesis-muted);
-    cursor: pointer;
-    font: inherit;
-    font-size: 11px;
-    font-weight: 700;
-    padding: 5px 10px;
-    width: 100%;
-    transition: all .2s;
-  }
-  .date-popover-clear-btn:hover {
-    border-color: var(--genesis-orange);
-    color: var(--genesis-orange);
-  }
-
-  .chart-container {
-    width: 100%;
-    margin-top: 6px;
-    position: relative;
-    user-select: none;
-  }
-  .chart-svg {
-    width: 100%;
-    height: 195px;
-    overflow: visible;
-    transition: opacity 0.2s ease;
-  }
-  .chart-grid-line {
-    stroke: var(--genesis-border);
-    stroke-dasharray: 4, 4;
-    stroke-width: 1;
-  }
-  .chart-axis-text {
-    fill: var(--genesis-muted);
-    font-size: 11px;
-    font-weight: 600;
-  }
-  .chart-timeline-track {
-    background: var(--genesis-border);
-    border-radius: 4px;
-    height: 6px;
-    margin: 6px 0 10px 34px;
-    overflow: hidden;
-  }
-  .chart-timeline-fill {
-    background: var(--genesis-track);
-    height: 100%;
-    border-radius: 4px;
-  }
-
-  .chart-loading-overlay {
-    position: absolute;
-    inset: 0;
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-    justify-content: center;
-    background: rgba(18, 16, 14, 0.45);
-    backdrop-filter: blur(2px);
-    -webkit-backdrop-filter: blur(2px);
-    border-radius: 12px;
-    z-index: 100;
-    gap: 8px;
-  }
-  :host(:not(.theme-dark)) .chart-loading-overlay {
-    background: rgba(255, 255, 255, 0.55);
-  }
-
-  .chart-tooltip {
-    position: absolute;
-    background: rgba(226, 213, 236, 0.94);
-    color: #4a0d46;
-    backdrop-filter: blur(8px);
-    -webkit-backdrop-filter: blur(8px);
-    border: 1px solid rgba(74, 13, 70, 0.22);
-    border-radius: 10px;
-    padding: 8px 12px;
-    box-shadow: 0 10px 30px rgba(0,0,0,0.32);
-    pointer-events: none;
-    z-index: 150;
-    min-width: 155px;
-    max-width: 215px;
-    opacity: 0;
-    transform: translateY(4px);
-    transition: opacity .15s ease, transform .15s ease;
-  }
-  .chart-tooltip.visible {
-    opacity: 1;
-    transform: translateY(0);
-  }
-  :host(.theme-dark) .chart-tooltip {
-    background: rgba(38, 22, 42, 0.93);
-    color: #f3e5f5;
-    border-color: rgba(186, 104, 200, 0.38);
-    box-shadow: 0 12px 34px rgba(0,0,0,0.65);
-  }
-
-  .tip-date-row {
-    display: flex;
-    justify-content: space-between;
-    align-items: baseline;
-    font-size: 12.5px;
-    font-weight: 800;
-    color: #4a0d46;
-    margin-bottom: 5px;
-    gap: 8px;
-    white-space: nowrap;
-  }
-  :host(.theme-dark) .tip-date-row { color: #e1bee7; }
-
-  .tip-kwh { font-size: 12px; font-weight: 800; color: #5d1757; }
-  :host(.theme-dark) .tip-kwh { color: #ce93d8; }
-
-  .tip-row {
-    display: flex;
-    justify-content: space-between;
-    font-size: 12px;
-    font-weight: 600;
-    color: #4a0d46;
-    margin: 2px 0;
-  }
-  :host(.theme-dark) .tip-row { color: #ede7f6; }
-
-  .tip-divider {
-    border-top: 1px solid rgba(74, 13, 70, 0.22);
-    margin: 5px 0;
-  }
-  :host(.theme-dark) .tip-divider { border-top-color: rgba(186, 104, 200, 0.25); }
-
-  .tip-row.total { font-weight: 800; font-size: 12.5px; }
-
-  .tip-ps-badge {
-    background: rgba(241, 91, 41, 0.16);
-    border: 1px solid rgba(241, 91, 41, 0.4);
-    border-radius: 6px;
-    color: #c94013;
-    font-size: 10.5px;
-    font-weight: 800;
-    margin-top: 5px;
-    padding: 3px 5px;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    gap: 4px;
-  }
-  :host(.theme-dark) .tip-ps-badge {
-    background: rgba(241, 91, 41, 0.22);
-    border-color: rgba(241, 91, 41, 0.55);
-    color: #ff8a65;
-  }
-
-  .tip-drilldown {
-    font-size: 10.5px;
-    font-weight: 800;
-    color: var(--genesis-plum);
-    margin-top: 6px;
-    text-align: center;
-    border-top: 1px dashed rgba(74, 13, 70, 0.25);
-    padding-top: 5px;
-  }
-  :host(.theme-dark) .tip-drilldown {
-    color: #ba68c8;
-    border-top-color: rgba(186, 104, 200, 0.3);
-  }
-
   .chart-legend {
     display: flex;
     justify-content: center;
     align-items: center;
     gap: 16px;
-    margin-top: 10px;
+    margin-top: 8px;
     font-size: 12px;
     color: var(--genesis-muted);
     font-weight: 600;
@@ -1314,9 +1239,6 @@ function buildTemplate(logoUrl) {
         </button>
         <button role="tab" id="tab-forecast" data-tab="${TAB_FORECAST}" aria-selected="false" hidden>Forecast</button>
         <button role="tab" id="tab-summary" data-tab="${TAB_SUMMARY}" aria-selected="false">Summary</button>
-
-        <!-- Top Menu Right-Aligned Meter Status Pill -->
-        <div class="main-sync-badge" id="main-meter-sync" style="display:none;margin-left:auto;"></div>
       </div>
 
       <!-- ── TAB 1: SHOUT ── -->
@@ -1359,88 +1281,100 @@ function buildTemplate(logoUrl) {
         </div>
       </div>
 
-      <!-- ── TAB 2: UNIFIED USAGE ── -->
+      <!-- ── TAB 2: RECENT & DETAILED USAGE ── -->
       <div class="panel" id="panel-${TAB_USAGE}" role="tabpanel" hidden>
         
+        <div class="usage-header-row">
+          <div class="usage-title">Recent Usage</div>
+          <div class="usage-sync-pill" id="usage-meter-sync" style="display:none;"></div>
+        </div>
+
+        <div class="usage-metrics-row">
+          <div class="usage-metric-box">
+            <span class="usage-metric-lbl">Daily avg.</span>
+            <span class="usage-metric-val" id="usage-daily-avg">$—</span>
+          </div>
+          <div class="usage-metric-box">
+            <span class="usage-metric-lbl">Total used</span>
+            <span class="usage-metric-val" id="usage-total-used">$—</span>
+          </div>
+        </div>
+        <div class="usage-period-center" id="usage-period-name">—</div>
+
+        <div class="chart-container" id="chart-wrap">
+          <svg class="chart-svg" id="recent-usage-svg" viewBox="0 0 460 195"></svg>
+          <div class="chart-tooltip" id="chart-tooltip"></div>
+          <div class="chart-timeline-track">
+            <div class="chart-timeline-fill" id="chart-timeline-fill" style="width:0%"></div>
+          </div>
+        </div>
+
+        <div class="chart-legend" id="chart-legend">
+          <div class="legend-item">
+            <span class="legend-dot" style="background:var(--genesis-orange)"></span>
+            <span>Electricity</span>
+          </div>
+          <div class="legend-item" id="legend-gas">
+            <span class="legend-dot" style="background:var(--genesis-plum)"></span>
+            <span>Natural Gas</span>
+          </div>
+          <div class="legend-item" id="legend-ps">
+            ${PS_PIN_SVG}
+            <span>Power Shout</span>
+          </div>
+        </div>
+
         <div class="detailed-usage-card">
           <div class="service-subtabs-row">
             <div class="service-subtabs" id="service-subtabs">
-              <button class="sel" data-service="recent" id="btn-subtab-recent">Recent</button>
-              <button data-service="elec" id="btn-subtab-elec">Electricity</button>
-              <button data-service="gas" id="btn-subtab-gas">Natural Gas</button>
-              <button data-service="ev" id="btn-subtab-ev" style="display:none;">EV</button>
+              <button class="sel" data-service="elec">Electricity Usage</button>
+              <button data-service="gas" id="btn-subtab-gas">Natural Gas Usage</button>
+              <button data-service="ev" id="btn-subtab-ev" hidden>EV</button>
             </div>
-
-            <!-- Targeted Sync Button located in Submenu Row -->
-            <button class="sync-action-btn" id="subtab-sync-btn" title="Sync current view data">
-              <svg class="sync-icon" viewBox="0 0 24 24" width="13" height="13" fill="currentColor">
-                <path d="M12 4V1L8 5l4 4V6c3.31 0 6 2.69 6 6 0 1.01-.25 1.97-.7 2.8l1.46 1.46A7.93 7.93 0 0020 12c0-4.42-3.58-8-8-8zm0 14c-3.31 0-6-2.69-6-6 0-1.01.25-1.97.7-2.8L5.24 7.74A7.93 7.93 0 004 12c0 4.42 3.58 8 8 8v3l4-4-4-4v3z"/>
-              </svg>
-              <span>Sync</span>
-            </button>
+            <div class="usage-sync-pill" id="detail-meter-sync" style="display:none;margin-bottom:2px;"></div>
           </div>
 
-          <!-- Controls for Recent Mode -->
-          <div id="recent-controls-wrap">
-            <div class="usage-metrics-row">
-              <div class="usage-metric-box">
-                <span class="usage-metric-lbl">Daily avg.</span>
-                <span class="usage-metric-val" id="usage-daily-avg">$—</span>
-              </div>
-              <div class="usage-metric-box">
-                <span class="usage-metric-lbl">Total used</span>
-                <span class="usage-metric-val" id="usage-total-used">$—</span>
-              </div>
+          <div class="analytics-toolbar">
+            <div class="granularity-pill" id="granularity-pill">
+              <button data-gran="monthly">Monthly</button>
+              <button data-gran="daily" class="sel">Daily</button>
             </div>
-            <div class="usage-period-center" id="usage-period-name">—</div>
-          </div>
-
-          <!-- Controls for Historical Browsing Mode (Elec, Gas, EV) -->
-          <div id="historical-controls-wrap" style="display:none;">
-            <div class="analytics-toolbar">
-              <div class="granularity-pill" id="granularity-pill">
-                <button data-gran="monthly" id="btn-gran-monthly">Monthly</button>
-                <button data-gran="daily" class="sel" id="btn-gran-daily">Daily</button>
-              </div>
-              <div class="unit-toggle-wrap">
-                <span>kWh</span>
-                <button class="unit-switch" id="detail-unit-switch" title="Toggle kWh / $"></button>
-                <span>$</span>
-              </div>
-            </div>
-
-            <div class="date-navigator">
-              <button class="date-nav-btn" id="date-nav-prev">‹</button>
-              <div class="date-nav-label" id="date-nav-label">— ▾</div>
-              <button class="date-nav-btn" id="date-nav-next">›</button>
-
-              <div class="date-popover" id="date-popover" hidden>
-                <div class="date-popover-header">
-                  <span style="font-size:12px;font-weight:700;color:var(--genesis-muted);">Select Period</span>
-                  <select class="date-popover-year" id="date-popover-year"></select>
-                </div>
-                <div class="date-popover-grid" id="date-popover-months"></div>
-                <div class="date-popover-footer">
-                  <button class="date-popover-clear-btn" id="btn-clear-cache">🗑️ Clear Cached Usage</button>
-                </div>
-              </div>
+            <div class="unit-toggle-wrap">
+              <span>kWh</span>
+              <button class="unit-switch" id="detail-unit-switch" title="Toggle kWh / $"></button>
+              <span>$</span>
             </div>
           </div>
 
-          <!-- Single Unified Chart Canvas -->
-          <div class="chart-container" id="chart-wrap">
-            <svg class="chart-svg" id="usage-chart-svg" viewBox="0 0 460 195"></svg>
-            <div class="chart-tooltip" id="chart-tooltip"></div>
-            <div class="chart-loading-overlay" id="chart-loading-overlay" hidden>
-              <span class="spin" style="width:22px;height:22px;border-width:2.5px;color:var(--genesis-orange);"></span>
-              <span style="font-size:12px;font-weight:700;color:var(--genesis-muted);">Loading usage…</span>
-            </div>
-            <div class="chart-timeline-track" id="recent-timeline-track">
-              <div class="chart-timeline-fill" id="chart-timeline-fill" style="width:0%"></div>
+          <div class="date-navigator">
+            <button class="date-nav-btn" id="date-nav-prev">‹</button>
+            <div class="date-nav-label" id="date-nav-label">— ▾</div>
+            <button class="date-nav-btn" id="date-nav-next">›</button>
+
+            <div class="date-popover" id="date-popover" hidden>
+              <div class="date-popover-header">
+                <span style="font-size:12px;font-weight:700;color:var(--genesis-muted);">Select Period</span>
+                <select class="date-popover-year" id="date-popover-year"></select>
+              </div>
+              <div class="date-popover-grid" id="date-popover-months"></div>
             </div>
           </div>
 
-          <div class="chart-legend" id="usage-legend"></div>
+          <div class="chart-container" id="detail-chart-wrap">
+            <svg class="chart-svg" id="detailed-usage-svg" viewBox="0 0 460 205"></svg>
+            <div class="chart-tooltip" id="detail-chart-tooltip"></div>
+          </div>
+
+          <div class="chart-legend" id="detail-chart-legend" style="margin-top:12px;">
+            <div class="legend-item">
+              <span class="legend-dot" id="detail-legend-dot" style="background:var(--genesis-orange)"></span>
+              <span id="detail-legend-name">Electricity</span>
+            </div>
+            <div class="legend-item" id="detail-legend-ps">
+              ${PS_PIN_SVG}
+              <span>Power Shout</span>
+            </div>
+          </div>
         </div>
 
       </div>
@@ -1509,15 +1443,13 @@ class GenesisPowerShoutCard extends HTMLElement {
     this._tab = TAB_SHOUT;
 
     this._hasPowerShout = true;
-    this._hasElectricity = true;
     this._hasGas = false;
     this._hasEv = false;
 
-    this._activeService = "recent";
+    this._activeService = "elec";
     this._activeGranularity = "daily";
     this._detailUnit = "dollar";
     this._navDate = new Date();
-    this._lastNavDirection = 1;
 
     this._selectedHours = new Set();
     this._rankedHours = [];
@@ -1534,32 +1466,12 @@ class GenesisPowerShoutCard extends HTMLElement {
     this._monthDailyCache = { elec: new Map(), gas: new Map(), ev: new Map() };
     this._popoverOpen = false;
     this._loadingDetail = false;
-    this._prefetchTimer = null;
   }
 
   setConfig(config) {
     this._config = config || {};
     if (this._config.default_tab) {
       this._tab = this._config.default_tab;
-    }
-    if (this._config.clear_cache === true) {
-      this._clearAllCache();
-    }
-    this._applyCustomBannerColors();
-  }
-
-  _applyCustomBannerColors() {
-    const liveColor = this._config.live_banner_color || this._config.live_color;
-    if (liveColor) {
-      this.style.setProperty("--live-banner-bg", liveColor);
-    }
-    const offerColor = this._config.offer_banner_color || this._config.offer_color;
-    if (offerColor) {
-      this.style.setProperty("--offer-banner-border", offerColor);
-    }
-    const expColor = this._config.expiring_banner_color || this._config.expiring_color;
-    if (expColor) {
-      this.style.setProperty("--expiring-banner-border", expColor);
     }
   }
 
@@ -1573,24 +1485,6 @@ class GenesisPowerShoutCard extends HTMLElement {
 
     this._applyThemeMode();
     this._update();
-  }
-
-  _clearAllCache() {
-    this._usageCache = {};
-    this._monthDailyCache = { elec: new Map(), gas: new Map(), ev: new Map() };
-    try {
-      const keysToRemove = [];
-      for (let i = 0; i < sessionStorage.length; i++) {
-        const k = sessionStorage.key(i);
-        if (k && (k.startsWith("genesis_") || k.startsWith("genesisenergy_"))) {
-          keysToRemove.push(k);
-        }
-      }
-      keysToRemove.forEach((k) => sessionStorage.removeItem(k));
-      console.info("[Genesis Card] Local browser cache cleared.");
-    } catch (err) {
-      console.warn("Could not clear sessionStorage:", err);
-    }
   }
 
   _applyThemeMode() {
@@ -1640,7 +1534,7 @@ class GenesisPowerShoutCard extends HTMLElement {
       entity_bill_total_used: findId("bill_total_used") || "sensor.genesis_energy_genesis_bill_total_used",
       entity_account_details: findId("account_details") || "sensor.genesis_energy_account_details",
       entity_lpg: findId("lpg_details") || "sensor.genesis_energy_lpg_details",
-      entity_ev_usage: findId("ev_plan_day_usage") || findId("ev_day_usage") || findId("ev_") || "sensor.genesis_energy_ev_plan_day_usage",
+      entity_ev_usage: findId("ev_day_usage") || "sensor.genesis_energy_ev_day_usage",
       entity_bill_balance: findId("bill_balance") || "sensor.genesis_energy_bill_balance",
       entity_bill_due_date: findId("bill_due_date") || "sensor.genesis_energy_bill_due_date",
       entity_booking_in_progress: findId("powershout_booking_in_progress") || "binary_sensor.genesis_energy_power_shout_booking_in_progress",
@@ -1650,27 +1544,11 @@ class GenesisPowerShoutCard extends HTMLElement {
     };
   }
 
-  _getHiddenServices() {
-    const hidden = new Set();
-    const cfgHidden = this._config.hidden_services;
-    if (Array.isArray(cfgHidden)) {
-      cfgHidden.forEach((s) => hidden.add(String(s).toLowerCase().trim()));
-    } else if (typeof cfgHidden === "string") {
-      cfgHidden.split(",").forEach((s) => hidden.add(s.toLowerCase().trim()));
-    }
-    if (this._config.show_ev === false) hidden.add("ev");
-    if (this._config.show_gas === false || this._config.show_natural_gas === false) hidden.add("gas");
-    if (this._config.show_elec === false || this._config.show_electricity === false) hidden.add("elec");
-    if (this._config.show_recent === false) hidden.add("recent");
-    return hidden;
-  }
-
   _build() {
     this.shadowRoot.innerHTML = buildTemplate(LOGO_SVG_URL);
     this._built = true;
     this._initDateLimits();
     this._wireListeners();
-    this._applyCustomBannerColors();
   }
 
   _el(id) {
@@ -1786,45 +1664,38 @@ class GenesisPowerShoutCard extends HTMLElement {
       this._executeConfirmedBooking();
     });
 
-    // Subtabs within Unified Usage Card
+    // Recent Usage Hitbox Listeners
+    const svg = this._el("recent-usage-svg");
+    const chartWrap = this._el("chart-wrap");
+
+    svg.addEventListener("pointermove", (e) => {
+      const target = e.target.closest(".col-hit-area");
+      if (target) {
+        const idx = parseInt(target.dataset.col, 10);
+        this._showRecentTooltip(idx);
+      }
+    });
+    chartWrap.addEventListener("pointerleave", () => this._hideRecentTooltip());
+
+    // Detailed Usage Subtabs
     this.shadowRoot.querySelectorAll("#service-subtabs button").forEach((btn) => {
       btn.addEventListener("click", () => {
         this.shadowRoot.querySelectorAll("#service-subtabs button").forEach((b) => b.classList.remove("sel"));
         btn.classList.add("sel");
         this._activeService = btn.dataset.service;
-
-        // If EV is selected, enforce daily granularity and align date bounds
-        if (this._activeService === "ev") {
-          this._activeGranularity = "daily";
-          const now = new Date();
-          const minEv = new Date(now.getFullYear(), now.getMonth() - 1, 1);
-          if (this._navDate < minEv) {
-            this._navDate = minEv;
-          }
-        }
-
-        this._updateMainMeterSyncBadge(this._entities);
-        this._renderUnifiedUsageGraph();
+        this._updateDetailMeterSyncBadge(this._entities);
+        this._renderDetailedUsageGraph();
       });
     });
-
-    // Surgical Targeted Sync Button in Sub-Menu Row
-    const syncBtn = this._el("subtab-sync-btn");
-    if (syncBtn) {
-      syncBtn.addEventListener("click", () => {
-        this._triggerTargetedSync();
-      });
-    }
 
     // Granularity (Monthly / Daily)
     this.shadowRoot.querySelectorAll("#granularity-pill button").forEach((btn) => {
       btn.addEventListener("click", () => {
-        if (this._activeService === "ev" && btn.dataset.gran === "monthly") return;
         this.shadowRoot.querySelectorAll("#granularity-pill button").forEach((b) => b.classList.remove("sel"));
         btn.classList.add("sel");
         this._activeGranularity = btn.dataset.gran;
         this._closePopover();
-        this._renderUnifiedUsageGraph();
+        this._renderDetailedUsageGraph();
       });
     });
 
@@ -1833,17 +1704,11 @@ class GenesisPowerShoutCard extends HTMLElement {
     unitSwitch.addEventListener("click", () => {
       this._detailUnit = this._detailUnit === "dollar" ? "kwh" : "dollar";
       unitSwitch.classList.toggle("active-dollar", this._detailUnit === "dollar");
-      this._renderUnifiedUsageGraph();
+      this._renderDetailedUsageGraph();
     });
 
-    this._el("date-nav-prev").addEventListener("click", () => {
-      this._lastNavDirection = -1;
-      this._shiftDate(-1);
-    });
-    this._el("date-nav-next").addEventListener("click", () => {
-      this._lastNavDirection = 1;
-      this._shiftDate(1);
-    });
+    this._el("date-nav-prev").addEventListener("click", () => this._shiftDate(-1));
+    this._el("date-nav-next").addEventListener("click", () => this._shiftDate(1));
 
     // Calendar Popover Toggle
     this._el("date-nav-label").addEventListener("click", (e) => {
@@ -1857,35 +1722,21 @@ class GenesisPowerShoutCard extends HTMLElement {
       }
     });
 
-    // Clear Cache Button in Popover
-    this._el("btn-clear-cache").addEventListener("click", () => {
-      this._clearAllCache();
-      const btn = this._el("btn-clear-cache");
-      const origText = btn.textContent;
-      btn.textContent = "✓ Cache Cleared!";
-      setTimeout(() => {
-        btn.textContent = origText;
-        this._closePopover();
-        this._renderUnifiedUsageGraph();
-      }, 600);
-    });
+    // Detailed SVG Tooltip Hitboxes & Click-to-Drilldown
+    const detailSvg = this._el("detailed-usage-svg");
+    const detailChartWrap = this._el("detail-chart-wrap");
 
-    // SVG Hitbox Interaction & Click-to-Drilldown
-    const svg = this._el("usage-chart-svg");
-    const chartWrap = this._el("chart-wrap");
-
-    svg.addEventListener("pointermove", (e) => {
-      const target = e.target.closest(".chart-col-hit");
+    detailSvg.addEventListener("pointermove", (e) => {
+      const target = e.target.closest(".detail-col-hit");
       if (target) {
         const idx = parseInt(target.dataset.col, 10);
-        this._showTooltip(idx);
+        this._showDetailTooltip(idx);
       }
     });
-    chartWrap.addEventListener("pointerleave", () => this._hideTooltip());
+    detailChartWrap.addEventListener("pointerleave", () => this._hideDetailTooltip());
 
-    svg.addEventListener("click", (e) => {
-      if (this._activeService === "recent") return;
-      const target = e.target.closest(".chart-col-hit");
+    detailSvg.addEventListener("click", (e) => {
+      const target = e.target.closest(".detail-col-hit");
       if (!target) return;
       const idx = parseInt(target.dataset.col, 10);
       const d = this._currentDetailData[idx];
@@ -1899,8 +1750,8 @@ class GenesisPowerShoutCard extends HTMLElement {
           b.classList.toggle("sel", b.dataset.gran === "daily");
         });
 
-        this._hideTooltip();
-        this._renderUnifiedUsageGraph();
+        this._hideDetailTooltip();
+        this._renderDetailedUsageGraph();
       }
     });
   }
@@ -1926,8 +1777,7 @@ class GenesisPowerShoutCard extends HTMLElement {
     const now = new Date();
     const currentYear = now.getFullYear();
     const currentMonth = now.getMonth();
-    const isEv = this._activeService === "ev";
-    const minYear = isEv ? EV_START_YEAR : currentYear - 3;
+    const minYear = currentYear - 3;
 
     const yearSelect = this._el("date-popover-year");
     const monthsGrid = this._el("date-popover-months");
@@ -1944,11 +1794,9 @@ class GenesisPowerShoutCard extends HTMLElement {
       let mHtml = "";
       for (let m = 0; m < 12; m++) {
         const isFuture = (chosenYear === currentYear && m > currentMonth);
-        const isTooOldForEv = isEv && (chosenYear < EV_START_YEAR || (chosenYear === EV_START_YEAR && m < EV_START_MONTH));
-        const disabled = isFuture || isTooOldForEv;
         const isSel = (chosenYear === this._navDate.getFullYear() && m === this._navDate.getMonth());
         mHtml += `
-          <button class="date-popover-month-btn${isSel ? ' sel' : ''}" data-m="${m}" ${disabled ? 'disabled' : ''}>
+          <button class="date-popover-month-btn${isSel ? ' sel' : ''}" data-m="${m}" ${isFuture ? 'disabled' : ''}>
             ${monthsShort[m]}
           </button>
         `;
@@ -1961,7 +1809,7 @@ class GenesisPowerShoutCard extends HTMLElement {
           this._navDate.setFullYear(chosenYear);
           this._navDate.setMonth(m);
           this._closePopover();
-          this._renderUnifiedUsageGraph();
+          this._renderDetailedUsageGraph();
         });
       });
     };
@@ -1973,7 +1821,7 @@ class GenesisPowerShoutCard extends HTMLElement {
       if (this._activeGranularity === "monthly") {
         this._navDate.setFullYear(newY);
         this._closePopover();
-        this._renderUnifiedUsageGraph();
+        this._renderDetailedUsageGraph();
       } else {
         renderMonthsForYear(newY);
       }
@@ -1984,10 +1832,9 @@ class GenesisPowerShoutCard extends HTMLElement {
     const now = new Date();
     const currentYear = now.getFullYear();
     const currentMonth = now.getMonth();
-    const isEv = this._activeService === "ev";
-    const minYear = isEv ? currentYear : currentYear - 3;
+    const minYear = currentYear - 3;
 
-    if (this._activeGranularity === "monthly" && !isEv) {
+    if (this._activeGranularity === "monthly") {
       const nextY = this._navDate.getFullYear() + direction;
       if (nextY >= minYear && nextY <= currentYear) {
         this._navDate.setFullYear(nextY);
@@ -1998,139 +1845,137 @@ class GenesisPowerShoutCard extends HTMLElement {
       const testY = testD.getFullYear();
       const testM = testD.getMonth();
 
-      let isPastLimit = testY < minYear;
-      if (isEv) {
-        isPastLimit = (testY < EV_START_YEAR) || (testY === EV_START_YEAR && testM < EV_START_MONTH);
-      }
-      
+      const isPastLimit = testY < minYear;
       const isFutureLimit = (testY > currentYear) || (testY === currentYear && testM > currentMonth);
 
       if (!isPastLimit && !isFutureLimit) {
         this._navDate = testD;
       }
     }
-    this._renderUnifiedUsageGraph();
+    this._renderDetailedUsageGraph();
   }
 
-  _showTooltip(idx) {
+  _showRecentTooltip(idx) {
+    const d = this._currentDaysData[idx];
     const tooltip = this._el("chart-tooltip");
-    const chartWrap = this._el("chart-wrap");
-
-    if (this._activeService === "recent") {
-      const d = this._currentDaysData[idx];
-      if (!d || !d.hasData) {
-        this._hideTooltip();
-        return;
-      }
-
-      let psBadgeHtml = d.hasPS ? `<div class="tip-ps-badge">${PS_PIN_SVG} Power Shout Applied</div>` : "";
-      let gasRowHtml = (this._hasGas || d.gas > 0) ? `
-        <div class="tip-row"><span>Gas:</span><span>$${fmtNum(d.gas, 2)}</span></div>
-      ` : "";
-
-      tooltip.innerHTML = `
-        <div class="tip-date-row"><span>${escapeHtml(fmtTooltipDate(d.date))}</span></div>
-        <div class="tip-row"><span>Electricity:</span><span>$${fmtNum(d.elec, 2)}</span></div>
-        ${gasRowHtml}
-        <div class="tip-divider"></div>
-        <div class="tip-row total"><span>Total:</span><span>$${fmtNum(d.total, 2)}</span></div>
-        ${psBadgeHtml}
-      `;
-
-      const cxPct = d.cx / 460;
-      const wrapRect = chartWrap.getBoundingClientRect();
-      const isRightHalf = (cxPct * wrapRect.width) > (wrapRect.width / 2);
-      tooltip.style.left = isRightHalf ? "8px" : "auto";
-      tooltip.style.right = isRightHalf ? "auto" : "8px";
-      tooltip.style.top = "6px";
-      tooltip.classList.add("visible");
-    } else if (this._activeService === "ev") {
-      const d = this._currentDetailData[idx];
-      if (!d || !d.hasData) {
-        this._hideTooltip();
-        return;
-      }
-
-      let savingsHtml = d.savings > 0 ? `
-        <div class="tip-divider"></div>
-        <div class="tip-row" style="color:#00838f;font-weight:800;">
-          <span>💰 Off-Peak Savings:</span>
-          <span>+$${fmtNum(d.savings, 2)}</span>
-        </div>
-      ` : "";
-
-      tooltip.innerHTML = `
-        <div class="tip-date-row">
-          <span>${escapeHtml(d.title)}</span>
-          <span class="tip-kwh">${fmtNum(d.kw, 2)} kWh</span>
-        </div>
-        <div class="tip-row total">
-          <span>Total Cost:</span>
-          <span style="font-weight:800;">$${fmtNum(d.cost, 2)}</span>
-        </div>
-        <div class="tip-divider"></div>
-        <div class="tip-row">
-          <span>☀️ Day:</span>
-          <span>${fmtNum(d.kwDay, 2)} kWh ($${fmtNum(d.costDay, 2)})</span>
-        </div>
-        <div class="tip-row">
-          <span>🌙 Night (EV):</span>
-          <span>${fmtNum(d.kwNight, 2)} kWh ($${fmtNum(d.costNight, 2)})</span>
-        </div>
-        ${savingsHtml}
-      `;
-
-      const cxPct = d.cx / 460;
-      const wrapRect = chartWrap.getBoundingClientRect();
-      const isRightHalf = (cxPct * wrapRect.width) > (wrapRect.width / 2);
-      tooltip.style.left = isRightHalf ? "8px" : "auto";
-      tooltip.style.right = isRightHalf ? "auto" : "8px";
-      tooltip.style.top = "6px";
-      tooltip.classList.add("visible");
-    } else {
-      const d = this._currentDetailData[idx];
-      if (!d || !d.hasData) {
-        this._hideTooltip();
-        return;
-      }
-
-      let psBadgeHtml = "";
-      if (d.hasPS) {
-        let extraInfo = "";
-        if (d.psCredits > 0) extraInfo += ` · $${fmtNum(d.psCredits, 2)} credited`;
-        if (d.psConsumptions > 0) extraInfo += ` (${fmtNum(d.psConsumptions, 2)} kWh free)`;
-        psBadgeHtml = `<div class="tip-ps-badge">${PS_PIN_SVG} Power Shout${extraInfo || " Applied"}</div>`;
-      }
-
-      let drillHint = (this._activeGranularity === "monthly" && d.hasData)
-        ? `<div class="tip-drilldown">Click bar to view daily usage ↗</div>`
-        : "";
-
-      tooltip.innerHTML = `
-        <div class="tip-date-row">
-          <span>${escapeHtml(d.title)}</span>
-          <span class="tip-kwh">${fmtNum(d.kw, 2)} kWh</span>
-        </div>
-        <div class="tip-row total">
-          <span>${escapeHtml(d.label)}</span>
-          <span style="font-weight:800;">$${fmtNum(d.cost, 2)}</span>
-        </div>
-        ${psBadgeHtml}
-        ${drillHint}
-      `;
-
-      const cxPct = d.cx / 460;
-      const wrapRect = chartWrap.getBoundingClientRect();
-      const isRightHalf = (cxPct * wrapRect.width) > (wrapRect.width / 2);
-      tooltip.style.left = isRightHalf ? "8px" : "auto";
-      tooltip.style.right = isRightHalf ? "auto" : "8px";
-      tooltip.style.top = "6px";
-      tooltip.classList.add("visible");
+    if (!d || !d.hasData) {
+      this._hideRecentTooltip();
+      return;
     }
+
+    let psBadgeHtml = "";
+    if (d.hasPS) {
+      psBadgeHtml = `<div class="tip-ps-badge">${PS_PIN_SVG} Power Shout Applied</div>`;
+    }
+
+    let gasRowHtml = "";
+    if (this._hasGas || d.gas > 0) {
+      gasRowHtml = `
+        <div class="tip-row">
+          <span>Gas:</span>
+          <span>$${fmtNum(d.gas, 2)}</span>
+        </div>
+      `;
+    }
+
+    tooltip.innerHTML = `
+      <div class="tip-date-row">
+        <span>${escapeHtml(fmtTooltipDate(d.date))}</span>
+      </div>
+      <div class="tip-row">
+        <span>Electricity:</span>
+        <span>$${fmtNum(d.elec, 2)}</span>
+      </div>
+      ${gasRowHtml}
+      <div class="tip-divider"></div>
+      <div class="tip-row total">
+        <span>Total:</span>
+        <span>$${fmtNum(d.total, 2)}</span>
+      </div>
+      ${psBadgeHtml}
+    `;
+
+    const chartWrap = this._el("chart-wrap");
+    const wrapRect = chartWrap.getBoundingClientRect();
+    const cxPct = d.cx / 460;
+    const pixelX = cxPct * wrapRect.width;
+
+    const isRightHalf = pixelX > (wrapRect.width / 2);
+    if (isRightHalf) {
+      tooltip.style.left = "8px";
+      tooltip.style.right = "auto";
+    } else {
+      tooltip.style.left = "auto";
+      tooltip.style.right = "8px";
+    }
+
+    tooltip.style.top = "6px";
+    tooltip.classList.add("visible");
   }
 
-  _hideTooltip() {
+  _hideRecentTooltip() {
     const tooltip = this._el("chart-tooltip");
+    if (tooltip) tooltip.classList.remove("visible");
+  }
+
+  _showDetailTooltip(idx) {
+    const d = this._currentDetailData[idx];
+    const tooltip = this._el("detail-chart-tooltip");
+    if (!d || !d.hasData) {
+      this._hideDetailTooltip();
+      return;
+    }
+
+    let psBadgeHtml = "";
+    if (d.hasPS) {
+      let extraInfo = "";
+      if (d.psCredits > 0) {
+        extraInfo += ` · $${fmtNum(d.psCredits, 2)} credited`;
+      }
+      if (d.psConsumptions > 0) {
+        extraInfo += ` (${fmtNum(d.psConsumptions, 2)} kWh free)`;
+      }
+      psBadgeHtml = `<div class="tip-ps-badge">${PS_PIN_SVG} Power Shout${extraInfo || " Applied"}</div>`;
+    }
+
+    let drillHint = "";
+    if (this._activeGranularity === "monthly" && d.hasData) {
+      drillHint = `<div class="tip-drilldown">Click bar to view daily usage ↗</div>`;
+    }
+
+    tooltip.innerHTML = `
+      <div class="tip-date-row">
+        <span>${escapeHtml(d.title)}</span>
+        <span class="tip-kwh">${fmtNum(d.kw, 2)} kWh</span>
+      </div>
+      <div class="tip-row total">
+        <span>${escapeHtml(d.label)}</span>
+        <span style="font-weight:800;">$${fmtNum(d.cost, 2)}</span>
+      </div>
+      ${psBadgeHtml}
+      ${drillHint}
+    `;
+
+    const chartWrap = this._el("detail-chart-wrap");
+    const wrapRect = chartWrap.getBoundingClientRect();
+    const cxPct = d.cx / 460;
+    const pixelX = cxPct * wrapRect.width;
+
+    const isRightHalf = pixelX > (wrapRect.width / 2);
+    if (isRightHalf) {
+      tooltip.style.left = "8px";
+      tooltip.style.right = "auto";
+    } else {
+      tooltip.style.left = "auto";
+      tooltip.style.right = "8px";
+    }
+
+    tooltip.style.top = "6px";
+    tooltip.classList.add("visible");
+  }
+
+  _hideDetailTooltip() {
+    const tooltip = this._el("detail-chart-tooltip");
     if (tooltip) tooltip.classList.remove("visible");
   }
 
@@ -2155,12 +2000,6 @@ class GenesisPowerShoutCard extends HTMLElement {
     for (const name of [TAB_SHOUT, TAB_USAGE, TAB_PAST, TAB_FORECAST, TAB_SUMMARY]) {
       const panel = this._el(`panel-${name}`);
       if (panel) panel.toggleAttribute("hidden", name !== tab);
-    }
-    this._updateMainMeterSyncBadge(this._entities);
-
-    // Lazy load the usage canvas ONLY when navigating to the Usage tab
-    if (tab === TAB_USAGE) {
-      this._renderUnifiedUsageGraph();
     }
   }
 
@@ -2286,13 +2125,6 @@ class GenesisPowerShoutCard extends HTMLElement {
     }
   }
 
-  _showChartLoading(isLoading) {
-    const overlay = this._el("chart-loading-overlay");
-    const svg = this._el("usage-chart-svg");
-    if (overlay) overlay.toggleAttribute("hidden", !isLoading);
-    if (svg) svg.style.opacity = isLoading ? "0.38" : "1";
-  }
-
   _update() {
     if (!this._built || !this._hass) return;
     const entities = this._resolveEntities();
@@ -2336,40 +2168,10 @@ class GenesisPowerShoutCard extends HTMLElement {
     const supplies = sidekick?.supplyTypesArea?.supplyTypes || [];
     
     this._hasGas = supplies.some(s => (s.type || s.text || "").toLowerCase().includes("gas"));
-    this._hasEv = Boolean(
-      this._hass.states[entities.entity_ev_usage] ||
-      JSON.stringify(attrs.billing_plans || "").toLowerCase().includes("ev")
-    );
-    this._hasElectricity = true;
+    this._hasEv = Boolean(this._hass.states[entities.entity_ev_usage] || JSON.stringify(attrs.billing_plans || "").toLowerCase().includes("ev"));
 
-    // Service Filtering via Config (hidden_services)
-    const hidden = this._getHiddenServices();
-    const showRecent = !hidden.has("recent");
-    const showElec = this._hasElectricity && !hidden.has("elec") && !hidden.has("electricity");
-    const showGas = this._hasGas && !hidden.has("gas") && !hidden.has("natural_gas") && !hidden.has("naturalgas");
-    const showEv = this._hasEv && !hidden.has("ev");
-
-    this._el("btn-subtab-recent").style.display = showRecent ? "inline-block" : "none";
-    this._el("btn-subtab-elec").style.display = showElec ? "inline-block" : "none";
-    this._el("btn-subtab-gas").style.display = showGas ? "inline-block" : "none";
-    
-    const evBtn = this._el("btn-subtab-ev");
-    evBtn.style.display = showEv ? "inline-block" : "none";
-    evBtn.removeAttribute("hidden");
-
-    const visibleServices = [];
-    if (showRecent) visibleServices.push("recent");
-    if (showElec) visibleServices.push("elec");
-    if (showGas) visibleServices.push("gas");
-    if (showEv) visibleServices.push("ev");
-
-    if (!visibleServices.includes(this._activeService)) {
-      this._activeService = visibleServices[0] || "recent";
-    }
-
-    this.shadowRoot.querySelectorAll("#service-subtabs button").forEach((b) => {
-      b.classList.toggle("sel", b.dataset.service === this._activeService);
-    });
+    this._el("btn-subtab-gas").style.display = this._hasGas ? "inline-block" : "none";
+    this._el("btn-subtab-ev").style.display = this._hasEv ? "inline-block" : "none";
 
     const psWrap = this._el("powershout-hero-wrap");
     const psLogoWrap = this._el("powershout-logo-wrap");
@@ -2379,8 +2181,12 @@ class GenesisPowerShoutCard extends HTMLElement {
     const tabPast = this._el("tab-past");
     const tabForecast = this._el("tab-forecast");
 
+    // Dynamic Live Due Pill Update
     this._updateDuePill(entities, hasPowerShout);
-    this._updateMainMeterSyncBadge(entities);
+
+    // Update Right-Aligned Smart Meter Sync Badges
+    this._updateRecentMeterSyncBadge(entities);
+    this._updateDetailMeterSyncBadge(entities);
 
     if (hasPowerShout) {
       psWrap.removeAttribute("hidden");
@@ -2458,11 +2264,8 @@ class GenesisPowerShoutCard extends HTMLElement {
     this._syncCtaText();
     this._updateForecast();
     this._updateSummary(entities);
-
-    // Lazy load the usage canvas: ONLY render when Usage tab is active
-    if (this._tab === TAB_USAGE) {
-      this._renderUnifiedUsageGraph();
-    }
+    this._renderRecentUsageGraph(entities);
+    this._renderDetailedUsageGraph();
   }
 
   _updateDuePill(entities, hasPowerShout) {
@@ -2512,17 +2315,42 @@ class GenesisPowerShoutCard extends HTMLElement {
     pill.textContent = label;
   }
 
-  _updateMainMeterSyncBadge(entities) {
-    const el = this._el("main-meter-sync");
+  _updateRecentMeterSyncBadge(entities) {
+    const el = this._el("usage-meter-sync");
     if (!el) return;
 
-    if (this._tab !== TAB_USAGE) {
+    const updaterSt = entities?.entity_electricity_updater ? this._hass.states[entities.entity_electricity_updater] : null;
+    const latest = updaterSt?.attributes?.latest_reading;
+    const daysBehind = updaterSt?.attributes?.days_behind;
+
+    if (!latest) {
       el.style.display = "none";
       return;
     }
 
-    let updaterId = entities?.entity_electricity_updater;
-    if (this._activeService === "gas") {
+    const d = new Date(latest);
+    const dateLabel = isNaN(d) ? latest.split("T")[0] : d.toLocaleDateString([], { weekday: "short", day: "numeric", month: "short" });
+    const lagText = daysBehind != null ? `(${daysBehind}d lag)` : "";
+
+    let dotClass = "usage-sync-dot";
+    if (daysBehind > 3) {
+      dotClass += " stalled";
+    } else if (daysBehind > 2) {
+      dotClass += " lagging";
+    }
+
+    el.innerHTML = `<span class="${dotClass}"></span> Meter: <strong>${escapeHtml(dateLabel)}</strong> <span style="opacity:0.8;">${escapeHtml(lagText)}</span>`;
+    el.style.display = "inline-flex";
+  }
+
+  _updateDetailMeterSyncBadge(entities) {
+    const el = this._el("detail-meter-sync");
+    if (!el) return;
+
+    let updaterId = null;
+    if (this._activeService === "elec") {
+      updaterId = entities?.entity_electricity_updater;
+    } else if (this._activeService === "gas") {
       updaterId = entities?.entity_gas_updater;
     }
 
@@ -2551,49 +2379,8 @@ class GenesisPowerShoutCard extends HTMLElement {
       dotClass += " lagging";
     }
 
-    el.innerHTML = `
-      <span class="${dotClass}"></span>
-      <span class="sync-text-prefix">Meter:&nbsp;</span>
-      <strong>${escapeHtml(dateLabel)}</strong>&nbsp;
-      <span style="opacity:0.8;">${escapeHtml(lagText)}</span>
-    `;
+    el.innerHTML = `<span class="${dotClass}"></span> Meter: <strong>${escapeHtml(dateLabel)}</strong> <span style="opacity:0.8;">${escapeHtml(lagText)}</span>`;
     el.style.display = "inline-flex";
-  }
-
-  async _triggerTargetedSync() {
-    const btn = this._el("subtab-sync-btn");
-    if (!btn || btn.classList.contains("syncing")) return;
-    btn.classList.add("syncing");
-
-    // Clear card memory cache so Sync always pulls a fresh batch
-    this._usageCache = {};
-
-    const service = this._activeService;
-    const now = new Date();
-    const currentYear = now.getFullYear();
-    const pad = (n) => String(n).padStart(2, "0");
-    const currentMonthKey = `${currentYear}-${pad(now.getMonth() + 1)}`;
-    const viewedMKey = `${this._navDate.getFullYear()}-${pad(this._navDate.getMonth() + 1)}`;
-
-    this._monthDailyCache[service]?.delete(viewedMKey);
-    try {
-      sessionStorage.removeItem(`genesis_daily_${service}_${viewedMKey}`);
-    } catch {}
-
-    try {
-      const fuelType = service === "gas" ? "gas" : (service === "recent" ? "both" : "electricity");
-      await this._hass.callService("genesisenergy", "force_update", { fuel_type: fuelType });
-    } catch (err) {
-      console.warn("[Genesis Card] Force update error:", err);
-    }
-
-    try {
-      await this._renderUnifiedUsageGraph();
-    } finally {
-      setTimeout(() => {
-        btn.classList.remove("syncing");
-      }, 500);
-    }
   }
 
   _updateTopBillingBox(entities) {
@@ -2624,7 +2411,7 @@ class GenesisPowerShoutCard extends HTMLElement {
     }
     this._el("top-forecast-val").textContent = forecastVal || "$—";
 
-    const periodDates = sidekick?.barArea?.leftText || "Current Billing Period";
+    const periodDates = sidekick?.barArea?.leftText || "Current Period";
     const periodDays = sidekick?.barArea?.rightText || "";
     const ratio = Math.min(100, Math.max(0, parseFloat(sidekick?.barArea?.ratioPercentage) || 0));
 
@@ -2809,127 +2596,48 @@ class GenesisPowerShoutCard extends HTMLElement {
   }
 
   _getMonthFromCache(service, monthKey) {
-    const now = new Date();
-    const currentMonthKey = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}`;
-    const isLiveMonth = (monthKey === currentMonthKey) || monthKey.startsWith(`genesis_monthly_${service}_${now.getFullYear()}`);
-
     if (this._monthDailyCache[service]?.has(monthKey)) {
-      const entry = this._monthDailyCache[service].get(monthKey);
-      if (!isLiveMonth || (Date.now() - (entry.ts || 0) < LIVE_DATA_CACHE_TTL_MS)) {
-        return entry.data || entry;
-      }
+      return this._monthDailyCache[service].get(monthKey);
     }
-    if (!isLiveMonth) {
-      try {
-        const raw = sessionStorage.getItem(`genesis_daily_${service}_${monthKey}`);
-        if (raw) {
-          const parsed = JSON.parse(raw);
-          if (Array.isArray(parsed) && parsed.length > 0) {
-            this._monthDailyCache[service].set(monthKey, { data: parsed, ts: Date.now() });
-            return parsed;
-          }
+    try {
+      const raw = sessionStorage.getItem(`genesis_daily_${service}_${monthKey}`);
+      if (raw) {
+        const parsed = JSON.parse(raw);
+        if (Array.isArray(parsed) && parsed.length > 0) {
+          this._monthDailyCache[service].set(monthKey, parsed);
+          return parsed;
         }
-      } catch {}
-    } 
+      }
+    } catch {}
     return null;
   }
 
   _saveMonthToCache(service, monthKey, items) {
     if (!items || !items.length) return;
-    const now = new Date();
-    const currentMonthKey = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}`;
-    const isLiveMonth = (monthKey === currentMonthKey) || monthKey.startsWith(`genesis_monthly_${service}_${now.getFullYear()}`);
-
-    this._monthDailyCache[service].set(monthKey, { data: items, ts: Date.now() });
-
-    if (!isLiveMonth) {
-      try {
-        sessionStorage.setItem(`genesis_daily_${service}_${monthKey}`, JSON.stringify(items));
-      } catch {}
-    }
-  }
-
-  _scheduleBackgroundPrefetch(service, year, month) {
-    if (service === "ev") return;
-    clearTimeout(this._prefetchTimer);
-    this._prefetchTimer = setTimeout(async () => {
-      const now = new Date();
-      const currentYear = now.getFullYear();
-      const currentMonth = now.getMonth();
-      const minYear = currentYear - 3;
-      const pad = (n) => String(n).padStart(2, "0");
-
-      let targetYear = year;
-      let targetMonth = month + (this._lastNavDirection * 3);
-      const testD = new Date(targetYear, targetMonth, 1);
-      targetYear = testD.getFullYear();
-      targetMonth = testD.getMonth();
-
-      if (targetYear < minYear || (targetYear > currentYear) || (targetYear === currentYear && targetMonth > currentMonth)) {
-        return;
-      }
-
-      const targetKey = `${targetYear}-${pad(targetMonth + 1)}`;
-      if (this._getMonthFromCache(service, targetKey)) {
-        return;
-      }
-
-      try {
-        const fetchStart = new Date(targetYear, targetMonth - 1, 1);
-        if (fetchStart.getFullYear() < minYear) fetchStart.setFullYear(minYear, 0, 1);
-        const fetchEnd = new Date(targetYear, targetMonth + 2, 0);
-
-        const startDateStr = `${fetchStart.getFullYear()}-${pad(fetchStart.getMonth() + 1)}-01`;
-        const endDateStr = `${fetchEnd.getFullYear()}-${pad(fetchEnd.getMonth() + 1)}-${pad(fetchEnd.getDate())}`;
-
-        const rawBatch = await this._fetchGenesisUsage(service, startDateStr, endDateStr, "DAILY");
-        const byMonth = {};
-        for (const item of rawBatch) {
-          const dtStr = item.startDate || item.date;
-          if (!dtStr) continue;
-          const mKey = dtStr.slice(0, 7);
-          if (!byMonth[mKey]) byMonth[mKey] = [];
-          byMonth[mKey].push(item);
-        }
-        for (const [mKey, monthItems] of Object.entries(byMonth)) {
-          this._saveMonthToCache(service, mKey, monthItems);
-        }
-      } catch {}
-    }, 1000);
+    this._monthDailyCache[service].set(monthKey, items);
+    try {
+      sessionStorage.setItem(`genesis_daily_${service}_${monthKey}`, JSON.stringify(items));
+    } catch {}
   }
 
   async _fetchGenesisUsage(fuel, startDateStr, endDateStr, intervalType) {
-    const now = new Date();
-    const pad = (n) => String(n).padStart(2, "0");
-    const todayStr = `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}`;
-
-    const isLivePeriod = (intervalType === "MONTHLY" && startDateStr.startsWith(String(now.getFullYear()))) || (endDateStr >= todayStr);
-
     const cacheKey = `${fuel}_${intervalType}_${startDateStr}_${endDateStr}`;
     const storageKey = `genesis_usage_${cacheKey}`;
 
-    // 4-Hour in-memory cache check
     if (this._usageCache[cacheKey]) {
-      const entry = this._usageCache[cacheKey];
-      const isFresh = !isLivePeriod || (Date.now() - (entry.ts || 0) < LIVE_DATA_CACHE_TTL_MS);
-      if (isFresh) {
-        return entry.data || entry;
-      }
+      return this._usageCache[cacheKey];
     }
 
-    // Disk cache check for completed past periods
-    if (!isLivePeriod) {
-      try {
-        const sessionData = sessionStorage.getItem(storageKey);
-        if (sessionData) {
-          const parsed = JSON.parse(sessionData);
-          if (Array.isArray(parsed) && parsed.length > 0) {
-            this._usageCache[cacheKey] = { data: parsed, ts: Date.now() };
-            return parsed;
-          }
+    try {
+      const sessionData = sessionStorage.getItem(storageKey);
+      if (sessionData) {
+        const parsed = JSON.parse(sessionData);
+        if (Array.isArray(parsed) && parsed.length > 0) {
+          this._usageCache[cacheKey] = parsed;
+          return parsed;
         }
-      } catch {}
-    }
+      }
+    } catch {}
 
     if (!this._hass) return [];
 
@@ -2943,12 +2651,10 @@ class GenesisPowerShoutCard extends HTMLElement {
       });
 
       if (resp && Array.isArray(resp.usage)) {
-        this._usageCache[cacheKey] = { data: resp.usage, ts: Date.now() };
-        if (!isLivePeriod) {
-          try {
-            sessionStorage.setItem(storageKey, JSON.stringify(resp.usage));
-          } catch {}
-        }
+        this._usageCache[cacheKey] = resp.usage;
+        try {
+          sessionStorage.setItem(storageKey, JSON.stringify(resp.usage));
+        } catch {}
         return resp.usage;
       }
     } catch (err) {
@@ -2957,30 +2663,7 @@ class GenesisPowerShoutCard extends HTMLElement {
     return [];
   }
 
-  // ── Unified Graph Rendering Engine (Recent & Historical) ────────────────
-  async _renderUnifiedUsageGraph() {
-    const isRecent = this._activeService === "recent";
-    this._el("recent-controls-wrap").style.display = isRecent ? "block" : "none";
-    this._el("historical-controls-wrap").style.display = isRecent ? "none" : "block";
-    this._el("recent-timeline-track").style.display = isRecent ? "block" : "none";
-
-    // When EV is active, hide the Monthly toggle because EV only supports Daily
-    const isEv = this._activeService === "ev";
-    const monthlyBtn = this._el("btn-gran-monthly");
-    if (monthlyBtn) {
-      monthlyBtn.style.display = isEv ? "none" : "inline-block";
-    }
-
-    if (isRecent) {
-      await this._renderRecentStackedCanvas();
-    } else {
-      await this._renderHistoricalCanvas();
-    }
-  }
-
-  async _renderRecentStackedCanvas() {
-    this._showChartLoading(false);
-    const entities = this._entities;
+  async _renderRecentUsageGraph(entities) {
     const acctDetailsSt = this._hass.states[entities.entity_account_details];
     const totalUsedSt = this._hass.states[entities.entity_bill_total_used];
     const balSt = this._hass.states[entities.entity_balance];
@@ -3006,6 +2689,9 @@ class GenesisPowerShoutCard extends HTMLElement {
       }
     }
     this._el("usage-period-name").textContent = periodName;
+
+    this._el("legend-gas").style.display = this._hasGas ? "flex" : "none";
+    this._el("legend-ps").style.display = this._hasPowerShout ? "flex" : "none";
 
     const numColumns = parseInt(this._config.chart_days, 10) || 17;
     const now = new Date();
@@ -3053,7 +2739,7 @@ class GenesisPowerShoutCard extends HTMLElement {
 
     const elecMap = new Map();
     for (const item of realElecData) {
-      const k = parseApiDateKey(item.startDate || item.date);
+      const k = parseApiDateKey(item.startDate);
       const cost = parseFloat(item.costNZD ?? item.cost ?? item.dollars ?? 0);
       const isPS = (
         item.type === "powerShout" ||
@@ -3067,7 +2753,7 @@ class GenesisPowerShoutCard extends HTMLElement {
 
     const gasMap = new Map();
     for (const item of realGasData) {
-      const k = parseApiDateKey(item.startDate || item.date);
+      const k = parseApiDateKey(item.startDate);
       const cost = parseFloat(item.costNZD ?? item.cost ?? item.dollars ?? 0);
       if (k) gasMap.set(k, { cost });
     }
@@ -3129,7 +2815,7 @@ class GenesisPowerShoutCard extends HTMLElement {
 
     this._currentDaysData = daysData;
 
-    const svg = this._el("usage-chart-svg");
+    const svg = this._el("recent-usage-svg");
     const yGridTicks = [0, maxVal * 0.33, maxVal * 0.66, maxVal];
 
     let svgHtml = `
@@ -3183,7 +2869,7 @@ class GenesisPowerShoutCard extends HTMLElement {
       }
 
       svgHtml += `
-        <rect x="${d.cx - colStep / 2}" y="0" width="${colStep}" height="${chartHeight}" fill="transparent" class="chart-col-hit" data-col="${idx}" style="cursor:pointer;" />
+        <rect x="${d.cx - colStep / 2}" y="0" width="${colStep}" height="${chartHeight}" fill="transparent" class="col-hit-area" data-col="${idx}" style="cursor:pointer;" />
       `;
     });
 
@@ -3191,455 +2877,306 @@ class GenesisPowerShoutCard extends HTMLElement {
 
     const timelinePct = Math.min(100, Math.max(0, (recordedDaysCount / numColumns) * 100));
     this._el("chart-timeline-fill").style.width = `${timelinePct}%`;
-
-    // Render Recent Legend
-    const legend = this._el("usage-legend");
-    legend.innerHTML = `
-      <div class="legend-item">
-        <span class="legend-dot" style="background:var(--genesis-orange)"></span>
-        <span>Electricity</span>
-      </div>
-      ${this._hasGas ? `
-        <div class="legend-item">
-          <span class="legend-dot" style="background:var(--genesis-plum)"></span>
-          <span>Natural Gas</span>
-        </div>
-      ` : ''}
-      ${this._hasPowerShout ? `
-        <div class="legend-item">
-          ${PS_PIN_SVG}
-          <span>Power Shout</span>
-        </div>
-      ` : ''}
-    `;
   }
 
-  async _renderHistoricalCanvas() {
+  async _renderDetailedUsageGraph() {
     if (this._loadingDetail) return;
     this._loadingDetail = true;
 
-    try {
-      const isDollar = this._detailUnit === "dollar";
-      const service = this._activeService;
-      const isEv = service === "ev";
-      const gran = isEv ? "daily" : this._activeGranularity;
+    const isDollar = this._detailUnit === "dollar";
+    const service = this._activeService;
+    const gran = this._activeGranularity;
 
-      let barColor = "var(--genesis-orange)";
-      let serviceLabel = "Electricity";
-      if (service === "gas") {
-        barColor = "var(--genesis-plum)";
-        serviceLabel = "Natural Gas";
-      } else if (service === "ev") {
-        barColor = "var(--genesis-teal)";
-        serviceLabel = "EV";
-      }
+    let barColor = "var(--genesis-orange)";
+    let serviceLabel = "Electricity";
+    if (service === "gas") {
+      barColor = "var(--genesis-plum)";
+      serviceLabel = "Gas";
+    } else if (service === "ev") {
+      barColor = "var(--genesis-teal)";
+      serviceLabel = "EV";
+    }
 
-      const monthsFull = ["January","February","March","April","May","June","July","August","September","October","November","December"];
-      const monthsShort = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
-      const dayOfWeekChars = ["S", "M", "T", "W", "Th", "F", "S"];
+    this._el("detail-legend-dot").style.background = barColor;
+    this._el("detail-legend-name").textContent = serviceLabel;
+    this._el("detail-legend-ps").style.display = this._hasPowerShout && service === "elec" ? "flex" : "none";
 
-      const now = new Date();
-      const currentYear = now.getFullYear();
-      const currentMonth = now.getMonth();
-      const minYear = isEv ? currentYear : currentYear - 3;
-      const pad = (n) => String(n).padStart(2, "0");
+    const monthsFull = ["January","February","March","April","May","June","July","August","September","October","November","December"];
+    const monthsShort = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
+    const dayOfWeekChars = ["S", "M", "T", "W", "Th", "F", "S"];
 
-      let startDateStr = "";
-      let endDateStr = "";
+    const now = new Date();
+    const currentYear = now.getFullYear();
+    const currentMonth = now.getMonth();
+    const minYear = currentYear - 3;
+    const pad = (n) => String(n).padStart(2, "0");
 
-      const navLabel = this._el("date-nav-label");
-      const prevBtn = this._el("date-nav-prev");
-      const nextBtn = this._el("date-nav-next");
+    let startDateStr = "";
+    let endDateStr = "";
 
-      let apiUsageList = [];
+    const navLabel = this._el("date-nav-label");
+    const prevBtn = this._el("date-nav-prev");
+    const nextBtn = this._el("date-nav-next");
 
-      if (gran === "monthly" && !isEv) {
-        const year = this._navDate.getFullYear();
-        navLabel.textContent = `${year} ▾`;
-        startDateStr = `${year}-01-01`;
-        endDateStr = `${year}-12-31`;
-        prevBtn.disabled = year <= minYear;
-        nextBtn.disabled = year >= currentYear;
+    let apiUsageList = [];
 
-        const monthlyCacheKey = `genesis_monthly_${service}_${year}`;
-        let cachedYear = this._getMonthFromCache(service, monthlyCacheKey);
-        if (cachedYear) {
-          apiUsageList = cachedYear;
-          this._showChartLoading(false);
-        } else {
-          this._showChartLoading(true);
-          apiUsageList = await this._fetchGenesisUsage(service, startDateStr, endDateStr, "MONTHLY");
-          this._showChartLoading(false);
-          this._saveMonthToCache(service, monthlyCacheKey, apiUsageList);
-        }
+    if (gran === "monthly") {
+      const year = this._navDate.getFullYear();
+      navLabel.textContent = `${year} ▾`;
+      startDateStr = `${year}-01-01`;
+      endDateStr = `${year}-12-31`;
+      prevBtn.disabled = year <= minYear;
+      nextBtn.disabled = year >= currentYear;
+
+      apiUsageList = await this._fetchGenesisUsage(service, startDateStr, endDateStr, "MONTHLY");
+    } else {
+      const year = this._navDate.getFullYear();
+      const month = this._navDate.getMonth();
+      const numDays = new Date(year, month + 1, 0).getDate();
+      navLabel.textContent = `${monthsFull[month]} ${year} ▾`;
+
+      prevBtn.disabled = year <= minYear && month === 0;
+      nextBtn.disabled = year >= currentYear && month >= currentMonth;
+
+      const targetMonthKey = `${year}-${pad(month + 1)}`;
+      const isCurrentMonth = (year === currentYear && month === currentMonth);
+      let cachedMonthData = this._getMonthFromCache(service, targetMonthKey);
+
+      // If past month is cached, load it instantly with 0ms delay!
+      if (cachedMonthData && !isCurrentMonth) {
+        apiUsageList = cachedMonthData;
       } else {
-        const year = this._navDate.getFullYear();
-        const month = this._navDate.getMonth();
-        const numDays = new Date(year, month + 1, 0).getDate();
-        navLabel.textContent = `${monthsFull[month]} ${year} ▾`;
-
-        if (isEv) {
-          prevBtn.disabled = (year < EV_START_YEAR) || (year === EV_START_YEAR && month <= EV_START_MONTH);
-        } else {
-          prevBtn.disabled = year <= minYear && month === 0;
+        // Fetch requested month + previous N months in one batch
+        const fetchStart = new Date(year, month - DAILY_FETCH_PREV_MONTHS, 1);
+        if (fetchStart.getFullYear() < minYear) {
+          fetchStart.setFullYear(minYear, 0, 1);
         }
-        nextBtn.disabled = year >= currentYear && month >= currentMonth;
+        startDateStr = `${fetchStart.getFullYear()}-${pad(fetchStart.getMonth() + 1)}-01`;
+        endDateStr = `${year}-${pad(month + 1)}-${pad(numDays)}`;
 
-        const targetMonthKey = `${year}-${pad(month + 1)}`;
-        let cachedMonthData = this._getMonthFromCache(service, targetMonthKey);
+        const rawBatch = await this._fetchGenesisUsage(service, startDateStr, endDateStr, "DAILY");
 
-        if (cachedMonthData) {
-          apiUsageList = cachedMonthData;
-          this._showChartLoading(false);
-        } else {
-          this._showChartLoading(true);
+        // Partition returned items into individual month caches
+        const byMonth = {};
+        for (const item of rawBatch) {
+          if (!item?.startDate) continue;
+          const mKey = item.startDate.slice(0, 7);
+          if (!byMonth[mKey]) byMonth[mKey] = [];
+          byMonth[mKey].push(item);
+        }
 
-          const isCurrentMonth = (year === currentYear && month === currentMonth);
-          let fetchStart, fetchEnd;
-          if (isCurrentMonth) {
-            fetchStart = new Date(year, month - (isEv ? 1 : DAILY_FETCH_PREV_MONTHS), 1);
-            fetchEnd = new Date(year, month + 1, 0);
+        for (const [mKey, monthItems] of Object.entries(byMonth)) {
+          this._saveMonthToCache(service, mKey, monthItems);
+        }
+
+        apiUsageList = byMonth[targetMonthKey] || rawBatch;
+      }
+    }
+
+    const balSt = this._hass.states[this._resolveEntities().entity_balance];
+    const bookings = balSt?.attributes?.bookings || [];
+    const psDateSet = new Set();
+    for (const b of bookings) {
+      const dtStr = b.startDateTime || b.startDate || b.start;
+      if (dtStr) {
+        const k = parseApiDateKey(dtStr);
+        if (k) psDateSet.add(k);
+      }
+    }
+
+    const apiLookup = new Map();
+    for (const item of apiUsageList) {
+      if (item && item.startDate) {
+        const fullKey = parseApiDateKey(item.startDate);
+        const monthKey = item.startDate.slice(0, 7);
+
+        const kw = Math.abs(parseFloat(item.kw ?? item.kWh ?? item.kwh ?? item.usage ?? item.consumption ?? 0));
+        const cost = parseFloat(item.costNZD ?? item.cost ?? item.dollars ?? item.amount ?? 0);
+
+        const isPS = (
+          item.type === "powerShout" ||
+          String(item.type).toLowerCase() === "powershout" ||
+          (item.powerShoutCredits != null && parseFloat(item.powerShoutCredits) > 0) ||
+          (item.powerShoutConsumptions != null && parseFloat(item.powerShoutConsumptions) > 0) ||
+          item.powerShoutPending === true ||
+          item.isPowerShout === true
+        );
+
+        const psCredits = parseFloat(item.powerShoutCredits || 0);
+        const psConsumptions = parseFloat(item.powerShoutConsumptions || 0);
+
+        const parsedItem = { kw, cost, isPS, psCredits, psConsumptions };
+        if (fullKey) apiLookup.set(fullKey, parsedItem);
+
+        if (monthKey) {
+          if (apiLookup.has(monthKey)) {
+            const cur = apiLookup.get(monthKey);
+            apiLookup.set(monthKey, {
+              kw: cur.kw + kw,
+              cost: cur.cost + cost,
+              isPS: cur.isPS || isPS,
+              psCredits: cur.psCredits + psCredits,
+              psConsumptions: cur.psConsumptions + psConsumptions,
+            });
           } else {
-            fetchStart = new Date(year, month - 1, 1);
-            const aheadMonth = month + (isEv ? 1 : 2);
-            fetchEnd = new Date(year, aheadMonth + 1, 0);
-            const currentMonthEnd = new Date(currentYear, currentMonth + 1, 0);
-            if (fetchEnd > currentMonthEnd) fetchEnd = currentMonthEnd;
-          }
-
-          if (fetchStart.getFullYear() < minYear) {
-            fetchStart.setFullYear(minYear, isEv ? (currentMonth - 1) : 0, 1);
-          }
-
-          startDateStr = `${fetchStart.getFullYear()}-${pad(fetchStart.getMonth() + 1)}-01`;
-          endDateStr = `${fetchEnd.getFullYear()}-${pad(fetchEnd.getMonth() + 1)}-${pad(fetchEnd.getDate())}`;
-
-          const rawBatch = await this._fetchGenesisUsage(service, startDateStr, endDateStr, "DAILY");
-          this._showChartLoading(false);
-
-          const byMonth = {};
-          for (const item of rawBatch) {
-            const dtStr = item.startDate || item.date;
-            if (!dtStr) continue;
-            const mKey = dtStr.slice(0, 7);
-            if (!byMonth[mKey]) byMonth[mKey] = [];
-            byMonth[mKey].push(item);
-          }
-
-          for (const [mKey, monthItems] of Object.entries(byMonth)) {
-            this._saveMonthToCache(service, mKey, monthItems);
-          }
-
-          apiUsageList = byMonth[targetMonthKey] || rawBatch;
-        }
-
-        if (!isEv) {
-          this._scheduleBackgroundPrefetch(service, year, month);
-        }
-      }
-
-      const balSt = this._hass.states[this._resolveEntities().entity_balance];
-      const bookings = balSt?.attributes?.bookings || [];
-      const psDateSet = new Set();
-      for (const b of bookings) {
-        const dtStr = b.startDateTime || b.startDate || b.start;
-        if (dtStr) {
-          const k = parseApiDateKey(dtStr);
-          if (k) psDateSet.add(k);
-        }
-      }
-
-      const apiLookup = new Map();
-      for (const item of apiUsageList) {
-        const dtStr = item.startDate || item.date;
-        if (item && dtStr) {
-          const fullKey = parseApiDateKey(dtStr);
-          const monthKey = dtStr.slice(0, 7);
-
-          let kw = 0;
-          let cost = 0;
-          let kwDay = 0;
-          let kwNight = 0;
-          let costDay = 0;
-          let costNight = 0;
-          let savings = 0;
-
-          if (service === "ev") {
-            kwDay = parseFloat(item.kWhDay || 0);
-            kwNight = parseFloat(item.kWhNight || 0);
-            costDay = parseFloat(item.usageCostDay || 0);
-            costNight = parseFloat(item.usageCostNight || 0);
-            kw = kwDay + kwNight;
-            cost = costDay + costNight;
-            const costAtDay = parseFloat(item.costWithDayRate || 0);
-            savings = Math.max(0, costAtDay - costNight);
-          } else {
-            kw = Math.abs(parseFloat(item.kw ?? item.kWh ?? item.kwh ?? item.usage ?? item.consumption ?? 0));
-            cost = parseFloat(item.costNZD ?? item.cost ?? item.dollars ?? item.amount ?? 0);
-          }
-
-          const isPS = (
-            item.type === "powerShout" ||
-            String(item.type).toLowerCase() === "powershout" ||
-            (item.powerShoutCredits != null && parseFloat(item.powerShoutCredits) > 0) ||
-            (item.powerShoutConsumptions != null && parseFloat(item.powerShoutConsumptions) > 0) ||
-            item.powerShoutPending === true ||
-            item.isPowerShout === true
-          );
-
-          const psCredits = parseFloat(item.powerShoutCredits || 0);
-          const psConsumptions = parseFloat(item.powerShoutConsumptions || 0);
-
-          const parsedItem = { 
-            kw, cost, isPS, psCredits, psConsumptions,
-            kwDay, kwNight, costDay, costNight, savings
-          };
-          if (fullKey) apiLookup.set(fullKey, parsedItem);
-
-          if (monthKey) {
-            if (apiLookup.has(monthKey)) {
-              const cur = apiLookup.get(monthKey);
-              apiLookup.set(monthKey, {
-                kw: cur.kw + kw,
-                cost: cur.cost + cost,
-                kwDay: (cur.kwDay || 0) + kwDay,
-                kwNight: (cur.kwNight || 0) + kwNight,
-                costDay: (cur.costDay || 0) + costDay,
-                costNight: (cur.costNight || 0) + costNight,
-                savings: (cur.savings || 0) + savings,
-                isPS: cur.isPS || isPS,
-                psCredits: cur.psCredits + psCredits,
-                psConsumptions: cur.psConsumptions + psConsumptions,
-              });
-            } else {
-              apiLookup.set(monthKey, parsedItem);
-            }
+            apiLookup.set(monthKey, parsedItem);
           }
         }
       }
+    }
 
-      const detailData = [];
+    const detailData = [];
 
-      if (gran === "daily") {
-        const year = this._navDate.getFullYear();
-        const month = this._navDate.getMonth();
-        const numDaysInMonth = new Date(year, month + 1, 0).getDate();
+    if (gran === "daily") {
+      const year = this._navDate.getFullYear();
+      const month = this._navDate.getMonth();
+      const numDaysInMonth = new Date(year, month + 1, 0).getDate();
 
-        for (let day = 1; day <= numDaysInMonth; day++) {
-          const dObj = new Date(year, month, day);
-          const isoKey = `${year}-${pad(month + 1)}-${pad(day)}`;
-          const isFuture = dObj > now;
+      for (let day = 1; day <= numDaysInMonth; day++) {
+        const dObj = new Date(year, month, day);
+        const isoKey = `${year}-${pad(month + 1)}-${pad(day)}`;
+        const isFuture = dObj > now;
 
-          let kwVal = 0;
-          let costVal = 0;
-          let isPSEntry = false;
-          let psCredits = 0;
-          let psConsumptions = 0;
-          let hasData = false;
-          let kwDay = 0, kwNight = 0, costDay = 0, costNight = 0, savings = 0;
+        let kwVal = 0;
+        let costVal = 0;
+        let isPSEntry = false;
+        let psCredits = 0;
+        let psConsumptions = 0;
+        let hasData = false;
 
-          if (!isFuture && apiLookup.has(isoKey)) {
-            const row = apiLookup.get(isoKey);
-            kwVal = row.kw;
-            costVal = row.cost;
-            kwDay = row.kwDay || 0;
-            kwNight = row.kwNight || 0;
-            costDay = row.costDay || 0;
-            costNight = row.costNight || 0;
-            savings = row.savings || 0;
-            isPSEntry = row.isPS || psDateSet.has(isoKey);
-            psCredits = row.psCredits;
-            psConsumptions = row.psConsumptions;
-            hasData = true;
-          } else if (!isFuture && psDateSet.has(isoKey)) {
-            isPSEntry = true;
-          }
-
-          detailData.push({
-            label: serviceLabel,
-            title: fmtTooltipDate(dObj),
-            bottomChar: dayOfWeekChars[dObj.getDay()],
-            bottomNum: String(day).padStart(2, "0"),
-            kw: kwVal,
-            cost: costVal,
-            kwDay, kwNight, costDay, costNight, savings,
-            value: isDollar ? costVal : kwVal,
-            hasPS: isPSEntry && service === "elec" && this._hasPowerShout,
-            psCredits,
-            psConsumptions,
-            hasData,
-          });
+        if (!isFuture && apiLookup.has(isoKey)) {
+          const row = apiLookup.get(isoKey);
+          kwVal = row.kw;
+          costVal = row.cost;
+          isPSEntry = row.isPS || psDateSet.has(isoKey);
+          psCredits = row.psCredits;
+          psConsumptions = row.psConsumptions;
+          hasData = true;
+        } else if (!isFuture && psDateSet.has(isoKey)) {
+          isPSEntry = true;
         }
-      } else if (gran === "monthly") {
-        const year = this._navDate.getFullYear();
 
-        for (let m = 0; m < 12; m++) {
-          const isFuture = (year > currentYear) || (year === currentYear && m > currentMonth);
-          let kwVal = 0;
-          let costVal = 0;
-          let isPSEntry = false;
-          let psCredits = 0;
-          let psConsumptions = 0;
-          let hasData = false;
-          let kwDay = 0, kwNight = 0, costDay = 0, costNight = 0, savings = 0;
-
-          const mKey = `${year}-${pad(m + 1)}`;
-          if (!isFuture && apiLookup.has(mKey)) {
-            const row = apiLookup.get(mKey);
-            kwVal = row.kw;
-            costVal = row.cost;
-            kwDay = row.kwDay || 0;
-            kwNight = row.kwNight || 0;
-            costDay = row.costDay || 0;
-            costNight = row.costNight || 0;
-            savings = row.savings || 0;
-            isPSEntry = row.isPS;
-            psCredits = row.psCredits;
-            psConsumptions = row.psConsumptions;
-            hasData = true;
-          }
-
-          detailData.push({
-            label: serviceLabel,
-            title: `${monthsFull[m]} ${year}`,
-            bottomChar: monthsShort[m],
-            bottomNum: "",
-            kw: kwVal,
-            cost: costVal,
-            kwDay, kwNight, costDay, costNight, savings,
-            value: isDollar ? costVal : kwVal,
-            hasPS: isPSEntry && service === "elec" && this._hasPowerShout,
-            psCredits,
-            psConsumptions,
-            hasData,
-          });
-        }
+        detailData.push({
+          label: serviceLabel,
+          title: fmtTooltipDate(dObj),
+          bottomChar: dayOfWeekChars[dObj.getDay()],
+          bottomNum: String(day).padStart(2, "0"),
+          kw: kwVal,
+          cost: costVal,
+          value: isDollar ? costVal : kwVal,
+          hasPS: isPSEntry && service === "elec" && this._hasPowerShout,
+          psCredits,
+          psConsumptions,
+          hasData,
+        });
       }
+    } else if (gran === "monthly") {
+      const year = this._navDate.getFullYear();
 
-      const svg = this._el("usage-chart-svg");
-      const chartWidth = 460;
-      const chartHeight = 195;
-      const leftPadding = 36;
-      const bottomPadding = 38;
-      const topMargin = 26;
-      const plotWidth = chartWidth - leftPadding - 10;
-      const plotHeight = chartHeight - bottomPadding;
+      for (let m = 0; m < 12; m++) {
+        const isFuture = (year > currentYear) || (year === currentYear && m > currentMonth);
+        let kwVal = 0;
+        let costVal = 0;
+        let isPSEntry = false;
+        let psCredits = 0;
+        let psConsumptions = 0;
+        let hasData = false;
 
-      const maxVal = Math.max(1, ...detailData.map(d => d.value)) * 1.15;
-      const step = maxVal / 3;
-      const yGridTicks = [0, step, step * 2, maxVal];
+        const mKey = `${year}-${pad(m + 1)}`;
+        if (!isFuture && apiLookup.has(mKey)) {
+          const row = apiLookup.get(mKey);
+          kwVal = row.kw;
+          costVal = row.cost;
+          isPSEntry = row.isPS;
+          psCredits = row.psCredits;
+          psConsumptions = row.psConsumptions;
+          hasData = true;
+        }
 
-      let svgHtml = `
-        <text x="12" y="12" class="chart-axis-text" font-weight="900" font-size="12">${isDollar ? "$" : "kWh"}</text>
+        detailData.push({
+          label: serviceLabel,
+          title: `${monthsFull[m]} ${year}`,
+          bottomChar: monthsShort[m],
+          bottomNum: "",
+          kw: kwVal,
+          cost: costVal,
+          value: isDollar ? costVal : kwVal,
+          hasPS: isPSEntry && service === "elec" && this._hasPowerShout,
+          psCredits,
+          psConsumptions,
+          hasData,
+        });
+      }
+    }
+
+    const svg = this._el("detailed-usage-svg");
+    const chartWidth = 460;
+    const chartHeight = 205;
+    const leftPadding = 36;
+    const bottomPadding = 38;
+    const topMargin = 26;
+    const plotWidth = chartWidth - leftPadding - 10;
+    const plotHeight = chartHeight - bottomPadding;
+
+    const maxVal = Math.max(1, ...detailData.map(d => d.value)) * 1.15;
+    const step = maxVal / 3;
+    const yGridTicks = [0, step, step * 2, maxVal];
+
+    let svgHtml = `
+      <text x="12" y="12" class="chart-axis-text" font-weight="900" font-size="12">${isDollar ? "$" : "kWh"}</text>
+    `;
+
+    for (const tick of yGridTicks) {
+      const yPos = plotHeight - (tick / maxVal) * (plotHeight - topMargin);
+      svgHtml += `
+        <line x1="${leftPadding}" y1="${yPos}" x2="${chartWidth - 8}" y2="${yPos}" class="chart-grid-line" />
+        <text x="10" y="${yPos + 4}" class="chart-axis-text">${Math.round(tick)}</text>
+      `;
+    }
+
+    const numCols = detailData.length;
+    const colStep = plotWidth / numCols;
+    const barWidth = Math.max(6, Math.min(18, colStep * 0.72));
+
+    detailData.forEach((d, idx) => {
+      const cx = leftPadding + idx * colStep + colStep / 2;
+      const x = cx - barWidth / 2;
+      const barHeight = d.hasData ? (d.value / maxVal) * (plotHeight - topMargin) : 0;
+      const yTop = plotHeight - barHeight;
+
+      d.cx = cx;
+      d.yTop = yTop;
+
+      svgHtml += `
+        <text x="${cx}" y="${plotHeight + 14}" text-anchor="middle" class="chart-axis-text" font-size="${gran === 'daily' ? '9.5' : '11'}">${d.bottomChar}</text>
+        ${d.bottomNum ? `<text x="${cx}" y="${plotHeight + 27}" text-anchor="middle" class="chart-axis-text" font-size="10" font-weight="800" fill="var(--genesis-text)">${d.bottomNum}</text>` : ''}
       `;
 
-      for (const tick of yGridTicks) {
-        const yPos = plotHeight - (tick / maxVal) * (plotHeight - topMargin);
+      if (d.hasData) {
         svgHtml += `
-          <line x1="${leftPadding}" y1="${yPos}" x2="${chartWidth - 8}" y2="${yPos}" class="chart-grid-line" />
-          <text x="10" y="${yPos + 4}" class="chart-axis-text">${Math.round(tick)}</text>
-        `;
-      }
-
-      const numCols = detailData.length;
-      const colStep = plotWidth / numCols;
-      const barWidth = Math.max(6, Math.min(18, colStep * 0.72));
-
-      detailData.forEach((d, idx) => {
-        const cx = leftPadding + idx * colStep + colStep / 2;
-        const x = cx - barWidth / 2;
-        const barHeight = d.hasData ? (d.value / maxVal) * (plotHeight - topMargin) : 0;
-        const yTop = plotHeight - barHeight;
-
-        d.cx = cx;
-        d.yTop = yTop;
-
-        svgHtml += `
-          <text x="${cx}" y="${plotHeight + 14}" text-anchor="middle" class="chart-axis-text" font-size="${gran === 'daily' ? '9.5' : '11'}">${d.bottomChar}</text>
-          ${d.bottomNum ? `<text x="${cx}" y="${plotHeight + 27}" text-anchor="middle" class="chart-axis-text" font-size="10" font-weight="800" fill="var(--genesis-text)">${d.bottomNum}</text>` : ''}
+          <rect x="${x}" y="${yTop}" width="${barWidth}" height="${barHeight}" fill="${barColor}" rx="2.5" />
         `;
 
-        if (d.hasData) {
-          if (service === "ev") {
-            const nightVal = isDollar ? d.costNight : d.kwNight;
-            const dayVal = isDollar ? d.costDay : d.kwDay;
-
-            const nightHeight = (nightVal / maxVal) * (plotHeight - topMargin);
-            const dayHeight = (dayVal / maxVal) * (plotHeight - topMargin);
-
-            const yNightTop = plotHeight - nightHeight;
-            const yDayTop = yNightTop - dayHeight;
-
-            svgHtml += `
-              <rect x="${x}" y="${yNightTop}" width="${barWidth}" height="${nightHeight}" fill="var(--genesis-teal)" rx="${dayHeight > 0 ? 0 : 2.5}" />
-            `;
-
-            if (dayHeight > 0) {
-              svgHtml += `
-                <rect x="${x}" y="${yDayTop}" width="${barWidth}" height="${dayHeight}" fill="var(--genesis-orange)" rx="2.5" />
-              `;
-            }
-          } else {
-
-            svgHtml += `
-              <rect x="${x}" y="${yTop}" width="${barWidth}" height="${barHeight}" fill="${barColor}" rx="2.5" />
-            `;
-
-            if (d.hasPS) {
-              const pinY = yTop - 16;
-              svgHtml += `
-                <g transform="translate(${cx}, ${pinY})">
-                  <circle cx="0" cy="0" r="8" fill="var(--genesis-orange)" />
-                  <path d="M 0 8 L 2.5 11.5 L -2.5 11.5 Z" fill="var(--genesis-orange)" />
-                  <text x="0" y="3" text-anchor="middle" fill="#ffffff" font-size="9" font-weight="900" font-family="-apple-system, sans-serif">P</text>
-                </g>
-              `;
-            }
-          }
+        if (d.hasPS) {
+          const pinY = yTop - 16;
+          svgHtml += `
+            <g transform="translate(${cx}, ${pinY})">
+              <circle cx="0" cy="0" r="8" fill="var(--genesis-orange)" />
+              <path d="M 0 8 L 2.5 11.5 L -2.5 11.5 Z" fill="var(--genesis-orange)" />
+              <text x="0" y="3" text-anchor="middle" fill="#ffffff" font-size="9" font-weight="900" font-family="-apple-system, sans-serif">P</text>
+            </g>
+          `;
         }
-
-        svgHtml += `
-          <rect x="${cx - colStep / 2}" y="0" width="${colStep}" height="${chartHeight}" fill="transparent" class="chart-col-hit" data-col="${idx}" style="cursor:pointer;" />
-        `;
-      });
-
-      svg.innerHTML = svgHtml;
-      this._currentDetailData = detailData;
-
-      // Render Historical Legend
-      const legend = this._el("usage-legend");
-      if (service === "ev") {
-        legend.innerHTML = `
-          <div class="legend-item">
-            <span class="legend-dot" style="background:var(--genesis-teal)"></span>
-            <span>🌙 Night (Off-Peak)</span>
-          </div>
-          <div class="legend-item">
-            <span class="legend-dot" style="background:var(--genesis-orange)"></span>
-            <span>☀️ Day (Standard)</span>
-          </div>
-        `;
-      } else {
-        legend.innerHTML = `
-          <div class="legend-item">
-            <span class="legend-dot" style="background:${barColor}"></span>
-            <span>${escapeHtml(serviceLabel)}</span>
-          </div>
-          ${(this._hasPowerShout && service === "elec") ? `
-            <div class="legend-item">
-              ${PS_PIN_SVG}
-              <span>Power Shout</span>
-            </div>
-          ` : ''}
-        `;
       }
 
-    } catch (err) {
-      console.warn("[Genesis Card] Error rendering usage chart:", err);
-    } finally {
-      this._loadingDetail = false;
-      this._showChartLoading(false);
-    }
+      svgHtml += `
+        <rect x="${cx - colStep / 2}" y="0" width="${colStep}" height="${chartHeight}" fill="transparent" class="detail-col-hit" data-col="${idx}" style="cursor:pointer;" />
+      `;
+    });
+
+    svg.innerHTML = svgHtml;
+    this._currentDetailData = detailData;
+    this._loadingDetail = false;
   }
 
   _updateSummary(entities) {
