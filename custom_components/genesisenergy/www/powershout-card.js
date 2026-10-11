@@ -4,8 +4,11 @@
 const CARD_VERSION = "2.0.1";
 const DOMAIN = "genesisenergy";
 
-// Number of previous/adjacent months to fetch in one batch for the daily chart
+
 const DAILY_FETCH_PREV_MONTHS = 3;
+const EV_START_YEAR = 2026;
+const EV_START_MONTH = 8; 
+const LIVE_DATA_CACHE_TTL_MS = 4 * 60 * 60 * 1000;
 
 const TAB_SHOUT = "shout";
 const TAB_USAGE = "usage";
@@ -140,6 +143,9 @@ const CARD_CSS = `
     --genesis-plum-light: #8e24aa;
     --genesis-teal: #00838f;
     --genesis-yellow: #e8a13c;
+    --live-banner-bg: var(--genesis-orange);
+    --offer-banner-border: var(--genesis-yellow);
+    --expiring-banner-border: var(--genesis-yellow);
     --genesis-card-bg: var(--ha-card-background, var(--card-background-color, #1a1612));
     --genesis-text: var(--primary-text-color, #ffffff);
     --genesis-muted: var(--secondary-text-color, #9e948a);
@@ -321,7 +327,7 @@ const CARD_CSS = `
 
   .live {
     align-items: center;
-    background: var(--genesis-orange);
+    background: var(--live-banner-bg);
     border-radius: 12px;
     color: #fff;
     display: flex;
@@ -330,7 +336,8 @@ const CARD_CSS = `
     justify-content: space-between;
     margin-top: 12px;
     padding: 11px 13px;
-    animation: pulse-glow-orange 2s ease-in-out infinite;
+    box-shadow: 0 0 16px 2px var(--live-banner-bg);
+    animation: pulse-glow-live 2s ease-in-out infinite;
   }
   .live .ll { align-items: center; display: flex; gap: 8px; }
   .live .dot {
@@ -341,32 +348,32 @@ const CARD_CSS = `
     width: 9px;
   }
   @keyframes pulse { 0%,100% { opacity: 1; transform: scale(1); } 50% { opacity: .3; transform: scale(.8); } }
-  @keyframes pulse-glow-orange {
-    0% { box-shadow: 0 0 0 0 rgba(241, 91, 41, 0.7); filter: brightness(1); }
-    50% { box-shadow: 0 0 16px 5px rgba(241, 91, 41, 0.55); filter: brightness(1.08); }
-    100% { box-shadow: 0 0 0 0 rgba(241, 91, 41, 0); filter: brightness(1); }
+  @keyframes pulse-glow-live {
+    0% { filter: brightness(1); }
+    50% { filter: brightness(1.12); }
+    100% { filter: brightness(1); }
   }
 
   .offer {
     align-items: center;
     background: rgba(232, 161, 60, 0.12);
-    border: 1.8px dashed var(--genesis-yellow);
+    border: 1.8px dashed var(--offer-banner-border);
     border-radius: 14px;
     display: flex;
     gap: 10px;
     justify-content: space-between;
     margin-top: 12px;
     padding: 12px 14px;
-    animation: pulse-glow-yellow 2.2s ease-in-out infinite;
+    animation: pulse-glow-offer 2.2s ease-in-out infinite;
   }
-  .offer .ot { color: var(--genesis-yellow); font-size: 13.5px; font-weight: 700; }
+  .offer .ot { color: var(--offer-banner-border); font-size: 13.5px; font-weight: 700; }
   .offer .ot b { color: var(--genesis-orange); font-size: 15px; }
   .offer .add-btn {
     appearance: none;
-    background: var(--genesis-yellow);
+    background: var(--offer-banner-border);
     border: 0;
     border-radius: 11px;
-    color: #3a2606;
+    color: #1a1612;
     cursor: pointer;
     flex: none;
     font: inherit;
@@ -377,16 +384,16 @@ const CARD_CSS = `
     transition: filter .2s;
   }
   .offer .add-btn:hover { filter: brightness(1.1); }
-  @keyframes pulse-glow-yellow {
-    0% { box-shadow: 0 0 0 0 rgba(232, 161, 60, 0.75); border-color: rgba(232, 161, 60, 0.8); background-color: rgba(232, 161, 60, 0.12); }
-    50% { box-shadow: 0 0 18px 6px rgba(232, 161, 60, 0.5); border-color: #ffd54f; background-color: rgba(232, 161, 60, 0.24); }
-    100% { box-shadow: 0 0 0 0 rgba(232, 161, 60, 0); border-color: rgba(232, 161, 60, 0.8); background-color: rgba(232, 161, 60, 0.12); }
+  @keyframes pulse-glow-offer {
+    0% { filter: brightness(1); }
+    50% { filter: brightness(1.1); }
+    100% { filter: brightness(1); }
   }
 
   .expiring-bar {
     align-items: center;
     background: rgba(232, 161, 60, 0.14);
-    border: 1.5px solid var(--genesis-yellow);
+    border: 1.5px solid var(--expiring-banner-border);
     border-radius: 12px;
     color: var(--genesis-text);
     display: flex;
@@ -451,6 +458,7 @@ const CARD_CSS = `
     padding: 2px 6px;
   }
 
+  /* Top Tabs Meter Status Pill (Far Right) */
   .main-sync-badge {
     margin-left: auto;
     font-size: 11.5px;
@@ -496,12 +504,18 @@ const CARD_CSS = `
     margin-top: 10px;
     position: relative;
   }
-  .service-subtabs {
+  .service-subtabs-row {
     display: flex;
-    gap: 8px;
+    justify-content: space-between;
+    align-items: center;
     border-bottom: 1.5px solid var(--genesis-border);
     padding-bottom: 4px;
     margin-bottom: 12px;
+    gap: 8px;
+  }
+  .service-subtabs {
+    display: flex;
+    gap: 6px;
     overflow-x: auto;
     scrollbar-width: none;
   }
@@ -524,6 +538,34 @@ const CARD_CSS = `
   .service-subtabs button.sel {
     border-bottom-color: var(--genesis-orange);
     color: var(--genesis-text);
+  }
+
+  /* Submenu Targeted Sync Button */
+  .sync-action-btn {
+    appearance: none;
+    background: var(--genesis-surface);
+    border: 1px solid var(--genesis-border);
+    border-radius: 8px;
+    color: var(--genesis-muted);
+    cursor: pointer;
+    font: inherit;
+    font-size: 11.5px;
+    font-weight: 700;
+    padding: 3px 8px;
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    transition: all .2s;
+    flex-shrink: 0;
+    margin-bottom: 2px;
+  }
+  .sync-action-btn:hover {
+    color: var(--genesis-orange);
+    border-color: var(--genesis-orange);
+  }
+  .sync-action-btn.syncing .sync-icon {
+    animation: spin .7s linear infinite;
+    color: var(--genesis-orange);
   }
 
   .usage-metrics-row {
@@ -1273,7 +1315,8 @@ function buildTemplate(logoUrl) {
         <button role="tab" id="tab-forecast" data-tab="${TAB_FORECAST}" aria-selected="false" hidden>Forecast</button>
         <button role="tab" id="tab-summary" data-tab="${TAB_SUMMARY}" aria-selected="false">Summary</button>
 
-        <div class="main-sync-badge" id="main-meter-sync" style="display:none;"></div>
+        <!-- Top Menu Right-Aligned Meter Status Pill -->
+        <div class="main-sync-badge" id="main-meter-sync" style="display:none;margin-left:auto;"></div>
       </div>
 
       <!-- ── TAB 1: SHOUT ── -->
@@ -1320,11 +1363,21 @@ function buildTemplate(logoUrl) {
       <div class="panel" id="panel-${TAB_USAGE}" role="tabpanel" hidden>
         
         <div class="detailed-usage-card">
-          <div class="service-subtabs" id="service-subtabs">
-            <button class="sel" data-service="recent" id="btn-subtab-recent">Recent</button>
-            <button data-service="elec" id="btn-subtab-elec">Electricity</button>
-            <button data-service="gas" id="btn-subtab-gas">Natural Gas</button>
-            <button data-service="ev" id="btn-subtab-ev" hidden>EV</button>
+          <div class="service-subtabs-row">
+            <div class="service-subtabs" id="service-subtabs">
+              <button class="sel" data-service="recent" id="btn-subtab-recent">Recent</button>
+              <button data-service="elec" id="btn-subtab-elec">Electricity</button>
+              <button data-service="gas" id="btn-subtab-gas">Natural Gas</button>
+              <button data-service="ev" id="btn-subtab-ev" style="display:none;">EV</button>
+            </div>
+
+            <!-- Targeted Sync Button located in Submenu Row -->
+            <button class="sync-action-btn" id="subtab-sync-btn" title="Sync current view data">
+              <svg class="sync-icon" viewBox="0 0 24 24" width="13" height="13" fill="currentColor">
+                <path d="M12 4V1L8 5l4 4V6c3.31 0 6 2.69 6 6 0 1.01-.25 1.97-.7 2.8l1.46 1.46A7.93 7.93 0 0020 12c0-4.42-3.58-8-8-8zm0 14c-3.31 0-6-2.69-6-6 0-1.01.25-1.97.7-2.8L5.24 7.74A7.93 7.93 0 004 12c0 4.42 3.58 8 8 8v3l4-4-4-4v3z"/>
+              </svg>
+              <span>Sync</span>
+            </button>
           </div>
 
           <!-- Controls for Recent Mode -->
@@ -1346,8 +1399,8 @@ function buildTemplate(logoUrl) {
           <div id="historical-controls-wrap" style="display:none;">
             <div class="analytics-toolbar">
               <div class="granularity-pill" id="granularity-pill">
-                <button data-gran="monthly">Monthly</button>
-                <button data-gran="daily" class="sel">Daily</button>
+                <button data-gran="monthly" id="btn-gran-monthly">Monthly</button>
+                <button data-gran="daily" class="sel" id="btn-gran-daily">Daily</button>
               </div>
               <div class="unit-toggle-wrap">
                 <span>kWh</span>
@@ -1492,6 +1545,22 @@ class GenesisPowerShoutCard extends HTMLElement {
     if (this._config.clear_cache === true) {
       this._clearAllCache();
     }
+    this._applyCustomBannerColors();
+  }
+
+  _applyCustomBannerColors() {
+    const liveColor = this._config.live_banner_color || this._config.live_color;
+    if (liveColor) {
+      this.style.setProperty("--live-banner-bg", liveColor);
+    }
+    const offerColor = this._config.offer_banner_color || this._config.offer_color;
+    if (offerColor) {
+      this.style.setProperty("--offer-banner-border", offerColor);
+    }
+    const expColor = this._config.expiring_banner_color || this._config.expiring_color;
+    if (expColor) {
+      this.style.setProperty("--expiring-banner-border", expColor);
+    }
   }
 
   getCardSize() {
@@ -1571,7 +1640,7 @@ class GenesisPowerShoutCard extends HTMLElement {
       entity_bill_total_used: findId("bill_total_used") || "sensor.genesis_energy_genesis_bill_total_used",
       entity_account_details: findId("account_details") || "sensor.genesis_energy_account_details",
       entity_lpg: findId("lpg_details") || "sensor.genesis_energy_lpg_details",
-      entity_ev_usage: findId("ev_day_usage") || "sensor.genesis_energy_ev_day_usage",
+      entity_ev_usage: findId("ev_plan_day_usage") || findId("ev_day_usage") || findId("ev_") || "sensor.genesis_energy_ev_plan_day_usage",
       entity_bill_balance: findId("bill_balance") || "sensor.genesis_energy_bill_balance",
       entity_bill_due_date: findId("bill_due_date") || "sensor.genesis_energy_bill_due_date",
       entity_booking_in_progress: findId("powershout_booking_in_progress") || "binary_sensor.genesis_energy_power_shout_booking_in_progress",
@@ -1601,6 +1670,7 @@ class GenesisPowerShoutCard extends HTMLElement {
     this._built = true;
     this._initDateLimits();
     this._wireListeners();
+    this._applyCustomBannerColors();
   }
 
   _el(id) {
@@ -1722,14 +1792,34 @@ class GenesisPowerShoutCard extends HTMLElement {
         this.shadowRoot.querySelectorAll("#service-subtabs button").forEach((b) => b.classList.remove("sel"));
         btn.classList.add("sel");
         this._activeService = btn.dataset.service;
+
+        // If EV is selected, enforce daily granularity and align date bounds
+        if (this._activeService === "ev") {
+          this._activeGranularity = "daily";
+          const now = new Date();
+          const minEv = new Date(now.getFullYear(), now.getMonth() - 1, 1);
+          if (this._navDate < minEv) {
+            this._navDate = minEv;
+          }
+        }
+
         this._updateMainMeterSyncBadge(this._entities);
         this._renderUnifiedUsageGraph();
       });
     });
 
+    // Surgical Targeted Sync Button in Sub-Menu Row
+    const syncBtn = this._el("subtab-sync-btn");
+    if (syncBtn) {
+      syncBtn.addEventListener("click", () => {
+        this._triggerTargetedSync();
+      });
+    }
+
     // Granularity (Monthly / Daily)
     this.shadowRoot.querySelectorAll("#granularity-pill button").forEach((btn) => {
       btn.addEventListener("click", () => {
+        if (this._activeService === "ev" && btn.dataset.gran === "monthly") return;
         this.shadowRoot.querySelectorAll("#granularity-pill button").forEach((b) => b.classList.remove("sel"));
         btn.classList.add("sel");
         this._activeGranularity = btn.dataset.gran;
@@ -1836,7 +1926,8 @@ class GenesisPowerShoutCard extends HTMLElement {
     const now = new Date();
     const currentYear = now.getFullYear();
     const currentMonth = now.getMonth();
-    const minYear = currentYear - 3;
+    const isEv = this._activeService === "ev";
+    const minYear = isEv ? EV_START_YEAR : currentYear - 3;
 
     const yearSelect = this._el("date-popover-year");
     const monthsGrid = this._el("date-popover-months");
@@ -1853,9 +1944,11 @@ class GenesisPowerShoutCard extends HTMLElement {
       let mHtml = "";
       for (let m = 0; m < 12; m++) {
         const isFuture = (chosenYear === currentYear && m > currentMonth);
+        const isTooOldForEv = isEv && (chosenYear < EV_START_YEAR || (chosenYear === EV_START_YEAR && m < EV_START_MONTH));
+        const disabled = isFuture || isTooOldForEv;
         const isSel = (chosenYear === this._navDate.getFullYear() && m === this._navDate.getMonth());
         mHtml += `
-          <button class="date-popover-month-btn${isSel ? ' sel' : ''}" data-m="${m}" ${isFuture ? 'disabled' : ''}>
+          <button class="date-popover-month-btn${isSel ? ' sel' : ''}" data-m="${m}" ${disabled ? 'disabled' : ''}>
             ${monthsShort[m]}
           </button>
         `;
@@ -1891,9 +1984,10 @@ class GenesisPowerShoutCard extends HTMLElement {
     const now = new Date();
     const currentYear = now.getFullYear();
     const currentMonth = now.getMonth();
-    const minYear = currentYear - 3;
+    const isEv = this._activeService === "ev";
+    const minYear = isEv ? currentYear : currentYear - 3;
 
-    if (this._activeGranularity === "monthly") {
+    if (this._activeGranularity === "monthly" && !isEv) {
       const nextY = this._navDate.getFullYear() + direction;
       if (nextY >= minYear && nextY <= currentYear) {
         this._navDate.setFullYear(nextY);
@@ -1904,7 +1998,11 @@ class GenesisPowerShoutCard extends HTMLElement {
       const testY = testD.getFullYear();
       const testM = testD.getMonth();
 
-      const isPastLimit = testY < minYear;
+      let isPastLimit = testY < minYear;
+      if (isEv) {
+        isPastLimit = (testY < EV_START_YEAR) || (testY === EV_START_YEAR && testM < EV_START_MONTH);
+      }
+      
       const isFutureLimit = (testY > currentYear) || (testY === currentYear && testM > currentMonth);
 
       if (!isPastLimit && !isFutureLimit) {
@@ -1937,6 +2035,49 @@ class GenesisPowerShoutCard extends HTMLElement {
         <div class="tip-divider"></div>
         <div class="tip-row total"><span>Total:</span><span>$${fmtNum(d.total, 2)}</span></div>
         ${psBadgeHtml}
+      `;
+
+      const cxPct = d.cx / 460;
+      const wrapRect = chartWrap.getBoundingClientRect();
+      const isRightHalf = (cxPct * wrapRect.width) > (wrapRect.width / 2);
+      tooltip.style.left = isRightHalf ? "8px" : "auto";
+      tooltip.style.right = isRightHalf ? "auto" : "8px";
+      tooltip.style.top = "6px";
+      tooltip.classList.add("visible");
+    } else if (this._activeService === "ev") {
+      const d = this._currentDetailData[idx];
+      if (!d || !d.hasData) {
+        this._hideTooltip();
+        return;
+      }
+
+      let savingsHtml = d.savings > 0 ? `
+        <div class="tip-divider"></div>
+        <div class="tip-row" style="color:#00838f;font-weight:800;">
+          <span>💰 Off-Peak Savings:</span>
+          <span>+$${fmtNum(d.savings, 2)}</span>
+        </div>
+      ` : "";
+
+      tooltip.innerHTML = `
+        <div class="tip-date-row">
+          <span>${escapeHtml(d.title)}</span>
+          <span class="tip-kwh">${fmtNum(d.kw, 2)} kWh</span>
+        </div>
+        <div class="tip-row total">
+          <span>Total Cost:</span>
+          <span style="font-weight:800;">$${fmtNum(d.cost, 2)}</span>
+        </div>
+        <div class="tip-divider"></div>
+        <div class="tip-row">
+          <span>☀️ Day:</span>
+          <span>${fmtNum(d.kwDay, 2)} kWh ($${fmtNum(d.costDay, 2)})</span>
+        </div>
+        <div class="tip-row">
+          <span>🌙 Night (EV):</span>
+          <span>${fmtNum(d.kwNight, 2)} kWh ($${fmtNum(d.costNight, 2)})</span>
+        </div>
+        ${savingsHtml}
       `;
 
       const cxPct = d.cx / 460;
@@ -2016,6 +2157,11 @@ class GenesisPowerShoutCard extends HTMLElement {
       if (panel) panel.toggleAttribute("hidden", name !== tab);
     }
     this._updateMainMeterSyncBadge(this._entities);
+
+    // Lazy load the usage canvas ONLY when navigating to the Usage tab
+    if (tab === TAB_USAGE) {
+      this._renderUnifiedUsageGraph();
+    }
   }
 
   _openBookingConfirmation() {
@@ -2190,7 +2336,10 @@ class GenesisPowerShoutCard extends HTMLElement {
     const supplies = sidekick?.supplyTypesArea?.supplyTypes || [];
     
     this._hasGas = supplies.some(s => (s.type || s.text || "").toLowerCase().includes("gas"));
-    this._hasEv = Boolean(this._hass.states[entities.entity_ev_usage] || JSON.stringify(attrs.billing_plans || "").toLowerCase().includes("ev"));
+    this._hasEv = Boolean(
+      this._hass.states[entities.entity_ev_usage] ||
+      JSON.stringify(attrs.billing_plans || "").toLowerCase().includes("ev")
+    );
     this._hasElectricity = true;
 
     // Service Filtering via Config (hidden_services)
@@ -2203,7 +2352,10 @@ class GenesisPowerShoutCard extends HTMLElement {
     this._el("btn-subtab-recent").style.display = showRecent ? "inline-block" : "none";
     this._el("btn-subtab-elec").style.display = showElec ? "inline-block" : "none";
     this._el("btn-subtab-gas").style.display = showGas ? "inline-block" : "none";
-    this._el("btn-subtab-ev").style.display = showEv ? "inline-block" : "none";
+    
+    const evBtn = this._el("btn-subtab-ev");
+    evBtn.style.display = showEv ? "inline-block" : "none";
+    evBtn.removeAttribute("hidden");
 
     const visibleServices = [];
     if (showRecent) visibleServices.push("recent");
@@ -2306,7 +2458,11 @@ class GenesisPowerShoutCard extends HTMLElement {
     this._syncCtaText();
     this._updateForecast();
     this._updateSummary(entities);
-    this._renderUnifiedUsageGraph();
+
+    // Lazy load the usage canvas: ONLY render when Usage tab is active
+    if (this._tab === TAB_USAGE) {
+      this._renderUnifiedUsageGraph();
+    }
   }
 
   _updateDuePill(entities, hasPowerShout) {
@@ -2402,6 +2558,61 @@ class GenesisPowerShoutCard extends HTMLElement {
       <span style="opacity:0.8;">${escapeHtml(lagText)}</span>
     `;
     el.style.display = "inline-flex";
+  }
+
+  async _triggerTargetedSync() {
+    const btn = this._el("subtab-sync-btn");
+    if (!btn || btn.classList.contains("syncing")) return;
+    btn.classList.add("syncing");
+
+    const service = this._activeService;
+    const now = new Date();
+    const currentYear = now.getFullYear();
+    const pad = (n) => String(n).padStart(2, "0");
+    const currentMonthKey = `${currentYear}-${pad(now.getMonth() + 1)}`;
+
+    if (service === "recent") {
+      this._usageCache = {};
+      try {
+        await this._hass.callService("genesisenergy", "force_update", { fuel_type: "both" });
+      } catch {}
+    } else if (service === "ev") {
+      delete this._usageCache["ev_DAILY_current"];
+      try {
+        await this._hass.callService("genesisenergy", "force_update", { fuel_type: "electricity" });
+      } catch {}
+    } else {
+      const isMonthly = this._activeGranularity === "monthly";
+      if (isMonthly) {
+        const year = this._navDate.getFullYear();
+        this._monthDailyCache[service]?.delete(`genesis_monthly_${service}_${year}`);
+        delete this._usageCache[`${service === 'gas' ? 'gas' : 'electricity'}_MONTHLY_${year}-01-01_${year}-12-31`];
+        if (year === currentYear) {
+          try {
+            await this._hass.callService("genesisenergy", "force_update", { fuel_type: service === "gas" ? "gas" : "electricity" });
+          } catch {}
+        }
+      } else {
+        const viewedMKey = `${this._navDate.getFullYear()}-${pad(this._navDate.getMonth() + 1)}`;
+        this._monthDailyCache[service]?.delete(viewedMKey);
+        try {
+          sessionStorage.removeItem(`genesis_daily_${service}_${viewedMKey}`);
+        } catch {}
+        if (viewedMKey === currentMonthKey) {
+          try {
+            await this._hass.callService("genesisenergy", "force_update", { fuel_type: service === "gas" ? "gas" : "electricity" });
+          } catch {}
+        }
+      }
+    }
+
+    try {
+      await this._renderUnifiedUsageGraph();
+    } finally {
+      setTimeout(() => {
+        btn.classList.remove("syncing");
+      }, 500);
+    }
   }
 
   _updateTopBillingBox(entities) {
@@ -2617,15 +2828,22 @@ class GenesisPowerShoutCard extends HTMLElement {
   }
 
   _getMonthFromCache(service, monthKey) {
+    const now = new Date();
+    const currentMonthKey = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}`;
+    const isLiveMonth = (monthKey === currentMonthKey) || monthKey.startsWith(`genesis_monthly_${service}_${now.getFullYear()}`);
+
     if (this._monthDailyCache[service]?.has(monthKey)) {
-      return this._monthDailyCache[service].get(monthKey);
+      const entry = this._monthDailyCache[service].get(monthKey);
+      if (!isLiveMonth || (Date.now() - (entry.ts || 0) < LIVE_DATA_CACHE_TTL_MS)) {
+        return entry.data || entry;
+      }
     }
     try {
       const raw = sessionStorage.getItem(`genesis_daily_${service}_${monthKey}`);
       if (raw) {
         const parsed = JSON.parse(raw);
         if (Array.isArray(parsed) && parsed.length > 0) {
-          this._monthDailyCache[service].set(monthKey, parsed);
+          this._monthDailyCache[service].set(monthKey, { data: parsed, ts: Date.now() });
           return parsed;
         }
       }
@@ -2635,13 +2853,21 @@ class GenesisPowerShoutCard extends HTMLElement {
 
   _saveMonthToCache(service, monthKey, items) {
     if (!items || !items.length) return;
-    this._monthDailyCache[service].set(monthKey, items);
-    try {
-      sessionStorage.setItem(`genesis_daily_${service}_${monthKey}`, JSON.stringify(items));
-    } catch {}
+    const now = new Date();
+    const currentMonthKey = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}`;
+    const isLiveMonth = (monthKey === currentMonthKey) || monthKey.startsWith(`genesis_monthly_${service}_${now.getFullYear()}`);
+
+    this._monthDailyCache[service].set(monthKey, { data: items, ts: Date.now() });
+
+    if (!isLiveMonth) {
+      try {
+        sessionStorage.setItem(`genesis_daily_${service}_${monthKey}`, JSON.stringify(items));
+      } catch {}
+    }
   }
 
   _scheduleBackgroundPrefetch(service, year, month) {
+    if (service === "ev") return;
     clearTimeout(this._prefetchTimer);
     this._prefetchTimer = setTimeout(async () => {
       const now = new Date();
@@ -2676,8 +2902,9 @@ class GenesisPowerShoutCard extends HTMLElement {
         const rawBatch = await this._fetchGenesisUsage(service, startDateStr, endDateStr, "DAILY");
         const byMonth = {};
         for (const item of rawBatch) {
-          if (!item?.startDate) continue;
-          const mKey = item.startDate.slice(0, 7);
+          const dtStr = item.startDate || item.date;
+          if (!dtStr) continue;
+          const mKey = dtStr.slice(0, 7);
           if (!byMonth[mKey]) byMonth[mKey] = [];
           byMonth[mKey].push(item);
         }
@@ -2689,23 +2916,37 @@ class GenesisPowerShoutCard extends HTMLElement {
   }
 
   async _fetchGenesisUsage(fuel, startDateStr, endDateStr, intervalType) {
+    const now = new Date();
+    const pad = (n) => String(n).padStart(2, "0");
+    const todayStr = `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}`;
+
+    const isLivePeriod = (intervalType === "MONTHLY" && startDateStr.startsWith(String(now.getFullYear()))) || (endDateStr >= todayStr);
+
     const cacheKey = `${fuel}_${intervalType}_${startDateStr}_${endDateStr}`;
     const storageKey = `genesis_usage_${cacheKey}`;
 
+    // 4-Hour in-memory cache check
     if (this._usageCache[cacheKey]) {
-      return this._usageCache[cacheKey];
+      const entry = this._usageCache[cacheKey];
+      const isFresh = !isLivePeriod || (Date.now() - (entry.ts || 0) < LIVE_DATA_CACHE_TTL_MS);
+      if (isFresh) {
+        return entry.data || entry;
+      }
     }
 
-    try {
-      const sessionData = sessionStorage.getItem(storageKey);
-      if (sessionData) {
-        const parsed = JSON.parse(sessionData);
-        if (Array.isArray(parsed) && parsed.length > 0) {
-          this._usageCache[cacheKey] = parsed;
-          return parsed;
+    // Disk cache check for completed past periods
+    if (!isLivePeriod) {
+      try {
+        const sessionData = sessionStorage.getItem(storageKey);
+        if (sessionData) {
+          const parsed = JSON.parse(sessionData);
+          if (Array.isArray(parsed) && parsed.length > 0) {
+            this._usageCache[cacheKey] = { data: parsed, ts: Date.now() };
+            return parsed;
+          }
         }
-      }
-    } catch {}
+      } catch {}
+    }
 
     if (!this._hass) return [];
 
@@ -2719,10 +2960,12 @@ class GenesisPowerShoutCard extends HTMLElement {
       });
 
       if (resp && Array.isArray(resp.usage)) {
-        this._usageCache[cacheKey] = resp.usage;
-        try {
-          sessionStorage.setItem(storageKey, JSON.stringify(resp.usage));
-        } catch {}
+        this._usageCache[cacheKey] = { data: resp.usage, ts: Date.now() };
+        if (!isLivePeriod) {
+          try {
+            sessionStorage.setItem(storageKey, JSON.stringify(resp.usage));
+          } catch {}
+        }
         return resp.usage;
       }
     } catch (err) {
@@ -2737,6 +2980,13 @@ class GenesisPowerShoutCard extends HTMLElement {
     this._el("recent-controls-wrap").style.display = isRecent ? "block" : "none";
     this._el("historical-controls-wrap").style.display = isRecent ? "none" : "block";
     this._el("recent-timeline-track").style.display = isRecent ? "block" : "none";
+
+    // When EV is active, hide the Monthly toggle because EV only supports Daily
+    const isEv = this._activeService === "ev";
+    const monthlyBtn = this._el("btn-gran-monthly");
+    if (monthlyBtn) {
+      monthlyBtn.style.display = isEv ? "none" : "inline-block";
+    }
 
     if (isRecent) {
       await this._renderRecentStackedCanvas();
@@ -2820,7 +3070,7 @@ class GenesisPowerShoutCard extends HTMLElement {
 
     const elecMap = new Map();
     for (const item of realElecData) {
-      const k = parseApiDateKey(item.startDate);
+      const k = parseApiDateKey(item.startDate || item.date);
       const cost = parseFloat(item.costNZD ?? item.cost ?? item.dollars ?? 0);
       const isPS = (
         item.type === "powerShout" ||
@@ -2834,7 +3084,7 @@ class GenesisPowerShoutCard extends HTMLElement {
 
     const gasMap = new Map();
     for (const item of realGasData) {
-      const k = parseApiDateKey(item.startDate);
+      const k = parseApiDateKey(item.startDate || item.date);
       const cost = parseFloat(item.costNZD ?? item.cost ?? item.dollars ?? 0);
       if (k) gasMap.set(k, { cost });
     }
@@ -2985,334 +3235,428 @@ class GenesisPowerShoutCard extends HTMLElement {
     if (this._loadingDetail) return;
     this._loadingDetail = true;
 
-    const isDollar = this._detailUnit === "dollar";
-    const service = this._activeService;
-    const gran = this._activeGranularity;
+    try {
+      const isDollar = this._detailUnit === "dollar";
+      const service = this._activeService;
+      const isEv = service === "ev";
+      const gran = isEv ? "daily" : this._activeGranularity;
 
-    let barColor = "var(--genesis-orange)";
-    let serviceLabel = "Electricity";
-    if (service === "gas") {
-      barColor = "var(--genesis-plum)";
-      serviceLabel = "Natural Gas";
-    } else if (service === "ev") {
-      barColor = "var(--genesis-teal)";
-      serviceLabel = "EV";
-    }
+      let barColor = "var(--genesis-orange)";
+      let serviceLabel = "Electricity";
+      if (service === "gas") {
+        barColor = "var(--genesis-plum)";
+        serviceLabel = "Natural Gas";
+      } else if (service === "ev") {
+        barColor = "var(--genesis-teal)";
+        serviceLabel = "EV";
+      }
 
-    const monthsFull = ["January","February","March","April","May","June","July","August","September","October","November","December"];
-    const monthsShort = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
-    const dayOfWeekChars = ["S", "M", "T", "W", "Th", "F", "S"];
+      const monthsFull = ["January","February","March","April","May","June","July","August","September","October","November","December"];
+      const monthsShort = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
+      const dayOfWeekChars = ["S", "M", "T", "W", "Th", "F", "S"];
 
-    const now = new Date();
-    const currentYear = now.getFullYear();
-    const currentMonth = now.getMonth();
-    const minYear = currentYear - 3;
-    const pad = (n) => String(n).padStart(2, "0");
+      const now = new Date();
+      const currentYear = now.getFullYear();
+      const currentMonth = now.getMonth();
+      const minYear = isEv ? currentYear : currentYear - 3;
+      const pad = (n) => String(n).padStart(2, "0");
 
-    let startDateStr = "";
-    let endDateStr = "";
+      let startDateStr = "";
+      let endDateStr = "";
 
-    const navLabel = this._el("date-nav-label");
-    const prevBtn = this._el("date-nav-prev");
-    const nextBtn = this._el("date-nav-next");
+      const navLabel = this._el("date-nav-label");
+      const prevBtn = this._el("date-nav-prev");
+      const nextBtn = this._el("date-nav-next");
 
-    let apiUsageList = [];
+      let apiUsageList = [];
 
-    if (gran === "monthly") {
-      const year = this._navDate.getFullYear();
-      navLabel.textContent = `${year} ▾`;
-      startDateStr = `${year}-01-01`;
-      endDateStr = `${year}-12-31`;
-      prevBtn.disabled = year <= minYear;
-      nextBtn.disabled = year >= currentYear;
+      if (gran === "monthly" && !isEv) {
+        const year = this._navDate.getFullYear();
+        navLabel.textContent = `${year} ▾`;
+        startDateStr = `${year}-01-01`;
+        endDateStr = `${year}-12-31`;
+        prevBtn.disabled = year <= minYear;
+        nextBtn.disabled = year >= currentYear;
 
-      this._showChartLoading(true);
-      apiUsageList = await this._fetchGenesisUsage(service, startDateStr, endDateStr, "MONTHLY");
-      this._showChartLoading(false);
-    } else {
-      const year = this._navDate.getFullYear();
-      const month = this._navDate.getMonth();
-      const numDays = new Date(year, month + 1, 0).getDate();
-      navLabel.textContent = `${monthsFull[month]} ${year} ▾`;
-
-      prevBtn.disabled = year <= minYear && month === 0;
-      nextBtn.disabled = year >= currentYear && month >= currentMonth;
-
-      const targetMonthKey = `${year}-${pad(month + 1)}`;
-      const isCurrentMonth = (year === currentYear && month === currentMonth);
-      let cachedMonthData = this._getMonthFromCache(service, targetMonthKey);
-
-      // Instant render if cached
-      if (cachedMonthData && !isCurrentMonth) {
-        apiUsageList = cachedMonthData;
-        this._showChartLoading(false);
-      } else {
-        this._showChartLoading(true);
-
-        // Bidirectional Centered Window for past months
-        let fetchStart, fetchEnd;
-        if (isCurrentMonth) {
-          fetchStart = new Date(year, month - DAILY_FETCH_PREV_MONTHS, 1);
-          fetchEnd = new Date(year, month + 1, 0);
+        const monthlyCacheKey = `genesis_monthly_${service}_${year}`;
+        let cachedYear = this._getMonthFromCache(service, monthlyCacheKey);
+        if (cachedYear) {
+          apiUsageList = cachedYear;
+          this._showChartLoading(false);
         } else {
-          // Look 1 month behind, target month, and 2 months ahead
-          fetchStart = new Date(year, month - 1, 1);
-          const aheadMonth = month + 2;
-          fetchEnd = new Date(year, aheadMonth + 1, 0);
-          // Clamp forward to current month end
-          const currentMonthEnd = new Date(currentYear, currentMonth + 1, 0);
-          if (fetchEnd > currentMonthEnd) fetchEnd = currentMonthEnd;
+          this._showChartLoading(true);
+          apiUsageList = await this._fetchGenesisUsage(service, startDateStr, endDateStr, "MONTHLY");
+          this._showChartLoading(false);
+          this._saveMonthToCache(service, monthlyCacheKey, apiUsageList);
         }
+      } else {
+        const year = this._navDate.getFullYear();
+        const month = this._navDate.getMonth();
+        const numDays = new Date(year, month + 1, 0).getDate();
+        navLabel.textContent = `${monthsFull[month]} ${year} ▾`;
 
-        if (fetchStart.getFullYear() < minYear) {
-          fetchStart.setFullYear(minYear, 0, 1);
+        if (isEv) {
+          prevBtn.disabled = (year < EV_START_YEAR) || (year === EV_START_YEAR && month <= EV_START_MONTH);
+        } else {
+          prevBtn.disabled = year <= minYear && month === 0;
         }
+        nextBtn.disabled = year >= currentYear && month >= currentMonth;
 
-        startDateStr = `${fetchStart.getFullYear()}-${pad(fetchStart.getMonth() + 1)}-01`;
-        endDateStr = `${fetchEnd.getFullYear()}-${pad(fetchEnd.getMonth() + 1)}-${pad(fetchEnd.getDate())}`;
+        const targetMonthKey = `${year}-${pad(month + 1)}`;
+        let cachedMonthData = this._getMonthFromCache(service, targetMonthKey);
 
-        const rawBatch = await this._fetchGenesisUsage(service, startDateStr, endDateStr, "DAILY");
-        this._showChartLoading(false);
+        if (cachedMonthData) {
+          apiUsageList = cachedMonthData;
+          this._showChartLoading(false);
+        } else {
+          this._showChartLoading(true);
 
-        const byMonth = {};
-        for (const item of rawBatch) {
-          if (!item?.startDate) continue;
-          const mKey = item.startDate.slice(0, 7);
-          if (!byMonth[mKey]) byMonth[mKey] = [];
-          byMonth[mKey].push(item);
-        }
-
-        for (const [mKey, monthItems] of Object.entries(byMonth)) {
-          this._saveMonthToCache(service, mKey, monthItems);
-        }
-
-        apiUsageList = byMonth[targetMonthKey] || rawBatch;
-      }
-
-      // Schedule quiet idle pre-fetch for next block
-      this._scheduleBackgroundPrefetch(service, year, month);
-    }
-
-    const balSt = this._hass.states[this._resolveEntities().entity_balance];
-    const bookings = balSt?.attributes?.bookings || [];
-    const psDateSet = new Set();
-    for (const b of bookings) {
-      const dtStr = b.startDateTime || b.startDate || b.start;
-      if (dtStr) {
-        const k = parseApiDateKey(dtStr);
-        if (k) psDateSet.add(k);
-      }
-    }
-
-    const apiLookup = new Map();
-    for (const item of apiUsageList) {
-      if (item && item.startDate) {
-        const fullKey = parseApiDateKey(item.startDate);
-        const monthKey = item.startDate.slice(0, 7);
-
-        const kw = Math.abs(parseFloat(item.kw ?? item.kWh ?? item.kwh ?? item.usage ?? item.consumption ?? 0));
-        const cost = parseFloat(item.costNZD ?? item.cost ?? item.dollars ?? item.amount ?? 0);
-
-        const isPS = (
-          item.type === "powerShout" ||
-          String(item.type).toLowerCase() === "powershout" ||
-          (item.powerShoutCredits != null && parseFloat(item.powerShoutCredits) > 0) ||
-          (item.powerShoutConsumptions != null && parseFloat(item.powerShoutConsumptions) > 0) ||
-          item.powerShoutPending === true ||
-          item.isPowerShout === true
-        );
-
-        const psCredits = parseFloat(item.powerShoutCredits || 0);
-        const psConsumptions = parseFloat(item.powerShoutConsumptions || 0);
-
-        const parsedItem = { kw, cost, isPS, psCredits, psConsumptions };
-        if (fullKey) apiLookup.set(fullKey, parsedItem);
-
-        if (monthKey) {
-          if (apiLookup.has(monthKey)) {
-            const cur = apiLookup.get(monthKey);
-            apiLookup.set(monthKey, {
-              kw: cur.kw + kw,
-              cost: cur.cost + cost,
-              isPS: cur.isPS || isPS,
-              psCredits: cur.psCredits + psCredits,
-              psConsumptions: cur.psConsumptions + psConsumptions,
-            });
+          const isCurrentMonth = (year === currentYear && month === currentMonth);
+          let fetchStart, fetchEnd;
+          if (isCurrentMonth) {
+            fetchStart = new Date(year, month - (isEv ? 1 : DAILY_FETCH_PREV_MONTHS), 1);
+            fetchEnd = new Date(year, month + 1, 0);
           } else {
-            apiLookup.set(monthKey, parsedItem);
+            fetchStart = new Date(year, month - 1, 1);
+            const aheadMonth = month + (isEv ? 1 : 2);
+            fetchEnd = new Date(year, aheadMonth + 1, 0);
+            const currentMonthEnd = new Date(currentYear, currentMonth + 1, 0);
+            if (fetchEnd > currentMonthEnd) fetchEnd = currentMonthEnd;
+          }
+
+          if (fetchStart.getFullYear() < minYear) {
+            fetchStart.setFullYear(minYear, isEv ? (currentMonth - 1) : 0, 1);
+          }
+
+          startDateStr = `${fetchStart.getFullYear()}-${pad(fetchStart.getMonth() + 1)}-01`;
+          endDateStr = `${fetchEnd.getFullYear()}-${pad(fetchEnd.getMonth() + 1)}-${pad(fetchEnd.getDate())}`;
+
+          const rawBatch = await this._fetchGenesisUsage(service, startDateStr, endDateStr, "DAILY");
+          this._showChartLoading(false);
+
+          const byMonth = {};
+          for (const item of rawBatch) {
+            const dtStr = item.startDate || item.date;
+            if (!dtStr) continue;
+            const mKey = dtStr.slice(0, 7);
+            if (!byMonth[mKey]) byMonth[mKey] = [];
+            byMonth[mKey].push(item);
+          }
+
+          for (const [mKey, monthItems] of Object.entries(byMonth)) {
+            this._saveMonthToCache(service, mKey, monthItems);
+          }
+
+          apiUsageList = byMonth[targetMonthKey] || rawBatch;
+        }
+
+        if (!isEv) {
+          this._scheduleBackgroundPrefetch(service, year, month);
+        }
+      }
+
+      const balSt = this._hass.states[this._resolveEntities().entity_balance];
+      const bookings = balSt?.attributes?.bookings || [];
+      const psDateSet = new Set();
+      for (const b of bookings) {
+        const dtStr = b.startDateTime || b.startDate || b.start;
+        if (dtStr) {
+          const k = parseApiDateKey(dtStr);
+          if (k) psDateSet.add(k);
+        }
+      }
+
+      const apiLookup = new Map();
+      for (const item of apiUsageList) {
+        const dtStr = item.startDate || item.date;
+        if (item && dtStr) {
+          const fullKey = parseApiDateKey(dtStr);
+          const monthKey = dtStr.slice(0, 7);
+
+          let kw = 0;
+          let cost = 0;
+          let kwDay = 0;
+          let kwNight = 0;
+          let costDay = 0;
+          let costNight = 0;
+          let savings = 0;
+
+          if (service === "ev") {
+            kwDay = parseFloat(item.kWhDay || 0);
+            kwNight = parseFloat(item.kWhNight || 0);
+            costDay = parseFloat(item.usageCostDay || 0);
+            costNight = parseFloat(item.usageCostNight || 0);
+            kw = kwDay + kwNight;
+            cost = costDay + costNight;
+            const costAtDay = parseFloat(item.costWithDayRate || 0);
+            savings = Math.max(0, costAtDay - costNight);
+          } else {
+            kw = Math.abs(parseFloat(item.kw ?? item.kWh ?? item.kwh ?? item.usage ?? item.consumption ?? 0));
+            cost = parseFloat(item.costNZD ?? item.cost ?? item.dollars ?? item.amount ?? 0);
+          }
+
+          const isPS = (
+            item.type === "powerShout" ||
+            String(item.type).toLowerCase() === "powershout" ||
+            (item.powerShoutCredits != null && parseFloat(item.powerShoutCredits) > 0) ||
+            (item.powerShoutConsumptions != null && parseFloat(item.powerShoutConsumptions) > 0) ||
+            item.powerShoutPending === true ||
+            item.isPowerShout === true
+          );
+
+          const psCredits = parseFloat(item.powerShoutCredits || 0);
+          const psConsumptions = parseFloat(item.powerShoutConsumptions || 0);
+
+          const parsedItem = { 
+            kw, cost, isPS, psCredits, psConsumptions,
+            kwDay, kwNight, costDay, costNight, savings
+          };
+          if (fullKey) apiLookup.set(fullKey, parsedItem);
+
+          if (monthKey) {
+            if (apiLookup.has(monthKey)) {
+              const cur = apiLookup.get(monthKey);
+              apiLookup.set(monthKey, {
+                kw: cur.kw + kw,
+                cost: cur.cost + cost,
+                kwDay: (cur.kwDay || 0) + kwDay,
+                kwNight: (cur.kwNight || 0) + kwNight,
+                costDay: (cur.costDay || 0) + costDay,
+                costNight: (cur.costNight || 0) + costNight,
+                savings: (cur.savings || 0) + savings,
+                isPS: cur.isPS || isPS,
+                psCredits: cur.psCredits + psCredits,
+                psConsumptions: cur.psConsumptions + psConsumptions,
+              });
+            } else {
+              apiLookup.set(monthKey, parsedItem);
+            }
           }
         }
       }
-    }
 
-    const detailData = [];
+      const detailData = [];
 
-    if (gran === "daily") {
-      const year = this._navDate.getFullYear();
-      const month = this._navDate.getMonth();
-      const numDaysInMonth = new Date(year, month + 1, 0).getDate();
+      if (gran === "daily") {
+        const year = this._navDate.getFullYear();
+        const month = this._navDate.getMonth();
+        const numDaysInMonth = new Date(year, month + 1, 0).getDate();
 
-      for (let day = 1; day <= numDaysInMonth; day++) {
-        const dObj = new Date(year, month, day);
-        const isoKey = `${year}-${pad(month + 1)}-${pad(day)}`;
-        const isFuture = dObj > now;
+        for (let day = 1; day <= numDaysInMonth; day++) {
+          const dObj = new Date(year, month, day);
+          const isoKey = `${year}-${pad(month + 1)}-${pad(day)}`;
+          const isFuture = dObj > now;
 
-        let kwVal = 0;
-        let costVal = 0;
-        let isPSEntry = false;
-        let psCredits = 0;
-        let psConsumptions = 0;
-        let hasData = false;
+          let kwVal = 0;
+          let costVal = 0;
+          let isPSEntry = false;
+          let psCredits = 0;
+          let psConsumptions = 0;
+          let hasData = false;
+          let kwDay = 0, kwNight = 0, costDay = 0, costNight = 0, savings = 0;
 
-        if (!isFuture && apiLookup.has(isoKey)) {
-          const row = apiLookup.get(isoKey);
-          kwVal = row.kw;
-          costVal = row.cost;
-          isPSEntry = row.isPS || psDateSet.has(isoKey);
-          psCredits = row.psCredits;
-          psConsumptions = row.psConsumptions;
-          hasData = true;
-        } else if (!isFuture && psDateSet.has(isoKey)) {
-          isPSEntry = true;
+          if (!isFuture && apiLookup.has(isoKey)) {
+            const row = apiLookup.get(isoKey);
+            kwVal = row.kw;
+            costVal = row.cost;
+            kwDay = row.kwDay || 0;
+            kwNight = row.kwNight || 0;
+            costDay = row.costDay || 0;
+            costNight = row.costNight || 0;
+            savings = row.savings || 0;
+            isPSEntry = row.isPS || psDateSet.has(isoKey);
+            psCredits = row.psCredits;
+            psConsumptions = row.psConsumptions;
+            hasData = true;
+          } else if (!isFuture && psDateSet.has(isoKey)) {
+            isPSEntry = true;
+          }
+
+          detailData.push({
+            label: serviceLabel,
+            title: fmtTooltipDate(dObj),
+            bottomChar: dayOfWeekChars[dObj.getDay()],
+            bottomNum: String(day).padStart(2, "0"),
+            kw: kwVal,
+            cost: costVal,
+            kwDay, kwNight, costDay, costNight, savings,
+            value: isDollar ? costVal : kwVal,
+            hasPS: isPSEntry && service === "elec" && this._hasPowerShout,
+            psCredits,
+            psConsumptions,
+            hasData,
+          });
         }
+      } else if (gran === "monthly") {
+        const year = this._navDate.getFullYear();
 
-        detailData.push({
-          label: serviceLabel,
-          title: fmtTooltipDate(dObj),
-          bottomChar: dayOfWeekChars[dObj.getDay()],
-          bottomNum: String(day).padStart(2, "0"),
-          kw: kwVal,
-          cost: costVal,
-          value: isDollar ? costVal : kwVal,
-          hasPS: isPSEntry && service === "elec" && this._hasPowerShout,
-          psCredits,
-          psConsumptions,
-          hasData,
-        });
-      }
-    } else if (gran === "monthly") {
-      const year = this._navDate.getFullYear();
+        for (let m = 0; m < 12; m++) {
+          const isFuture = (year > currentYear) || (year === currentYear && m > currentMonth);
+          let kwVal = 0;
+          let costVal = 0;
+          let isPSEntry = false;
+          let psCredits = 0;
+          let psConsumptions = 0;
+          let hasData = false;
+          let kwDay = 0, kwNight = 0, costDay = 0, costNight = 0, savings = 0;
 
-      for (let m = 0; m < 12; m++) {
-        const isFuture = (year > currentYear) || (year === currentYear && m > currentMonth);
-        let kwVal = 0;
-        let costVal = 0;
-        let isPSEntry = false;
-        let psCredits = 0;
-        let psConsumptions = 0;
-        let hasData = false;
+          const mKey = `${year}-${pad(m + 1)}`;
+          if (!isFuture && apiLookup.has(mKey)) {
+            const row = apiLookup.get(mKey);
+            kwVal = row.kw;
+            costVal = row.cost;
+            kwDay = row.kwDay || 0;
+            kwNight = row.kwNight || 0;
+            costDay = row.costDay || 0;
+            costNight = row.costNight || 0;
+            savings = row.savings || 0;
+            isPSEntry = row.isPS;
+            psCredits = row.psCredits;
+            psConsumptions = row.psConsumptions;
+            hasData = true;
+          }
 
-        const mKey = `${year}-${pad(m + 1)}`;
-        if (!isFuture && apiLookup.has(mKey)) {
-          const row = apiLookup.get(mKey);
-          kwVal = row.kw;
-          costVal = row.cost;
-          isPSEntry = row.isPS;
-          psCredits = row.psCredits;
-          psConsumptions = row.psConsumptions;
-          hasData = true;
+          detailData.push({
+            label: serviceLabel,
+            title: `${monthsFull[m]} ${year}`,
+            bottomChar: monthsShort[m],
+            bottomNum: "",
+            kw: kwVal,
+            cost: costVal,
+            kwDay, kwNight, costDay, costNight, savings,
+            value: isDollar ? costVal : kwVal,
+            hasPS: isPSEntry && service === "elec" && this._hasPowerShout,
+            psCredits,
+            psConsumptions,
+            hasData,
+          });
         }
-
-        detailData.push({
-          label: serviceLabel,
-          title: `${monthsFull[m]} ${year}`,
-          bottomChar: monthsShort[m],
-          bottomNum: "",
-          kw: kwVal,
-          cost: costVal,
-          value: isDollar ? costVal : kwVal,
-          hasPS: isPSEntry && service === "elec" && this._hasPowerShout,
-          psCredits,
-          psConsumptions,
-          hasData,
-        });
       }
-    }
 
-    const svg = this._el("usage-chart-svg");
-    const chartWidth = 460;
-    const chartHeight = 195;
-    const leftPadding = 36;
-    const bottomPadding = 38;
-    const topMargin = 26;
-    const plotWidth = chartWidth - leftPadding - 10;
-    const plotHeight = chartHeight - bottomPadding;
+      const svg = this._el("usage-chart-svg");
+      const chartWidth = 460;
+      const chartHeight = 195;
+      const leftPadding = 36;
+      const bottomPadding = 38;
+      const topMargin = 26;
+      const plotWidth = chartWidth - leftPadding - 10;
+      const plotHeight = chartHeight - bottomPadding;
 
-    const maxVal = Math.max(1, ...detailData.map(d => d.value)) * 1.15;
-    const step = maxVal / 3;
-    const yGridTicks = [0, step, step * 2, maxVal];
+      const maxVal = Math.max(1, ...detailData.map(d => d.value)) * 1.15;
+      const step = maxVal / 3;
+      const yGridTicks = [0, step, step * 2, maxVal];
 
-    let svgHtml = `
-      <text x="12" y="12" class="chart-axis-text" font-weight="900" font-size="12">${isDollar ? "$" : "kWh"}</text>
-    `;
-
-    for (const tick of yGridTicks) {
-      const yPos = plotHeight - (tick / maxVal) * (plotHeight - topMargin);
-      svgHtml += `
-        <line x1="${leftPadding}" y1="${yPos}" x2="${chartWidth - 8}" y2="${yPos}" class="chart-grid-line" />
-        <text x="10" y="${yPos + 4}" class="chart-axis-text">${Math.round(tick)}</text>
-      `;
-    }
-
-    const numCols = detailData.length;
-    const colStep = plotWidth / numCols;
-    const barWidth = Math.max(6, Math.min(18, colStep * 0.72));
-
-    detailData.forEach((d, idx) => {
-      const cx = leftPadding + idx * colStep + colStep / 2;
-      const x = cx - barWidth / 2;
-      const barHeight = d.hasData ? (d.value / maxVal) * (plotHeight - topMargin) : 0;
-      const yTop = plotHeight - barHeight;
-
-      d.cx = cx;
-      d.yTop = yTop;
-
-      svgHtml += `
-        <text x="${cx}" y="${plotHeight + 14}" text-anchor="middle" class="chart-axis-text" font-size="${gran === 'daily' ? '9.5' : '11'}">${d.bottomChar}</text>
-        ${d.bottomNum ? `<text x="${cx}" y="${plotHeight + 27}" text-anchor="middle" class="chart-axis-text" font-size="10" font-weight="800" fill="var(--genesis-text)">${d.bottomNum}</text>` : ''}
+      let svgHtml = `
+        <text x="12" y="12" class="chart-axis-text" font-weight="900" font-size="12">${isDollar ? "$" : "kWh"}</text>
       `;
 
-      if (d.hasData) {
+      for (const tick of yGridTicks) {
+        const yPos = plotHeight - (tick / maxVal) * (plotHeight - topMargin);
         svgHtml += `
-          <rect x="${x}" y="${yTop}" width="${barWidth}" height="${barHeight}" fill="${barColor}" rx="2.5" />
+          <line x1="${leftPadding}" y1="${yPos}" x2="${chartWidth - 8}" y2="${yPos}" class="chart-grid-line" />
+          <text x="10" y="${yPos + 4}" class="chart-axis-text">${Math.round(tick)}</text>
+        `;
+      }
+
+      const numCols = detailData.length;
+      const colStep = plotWidth / numCols;
+      const barWidth = Math.max(6, Math.min(18, colStep * 0.72));
+
+      detailData.forEach((d, idx) => {
+        const cx = leftPadding + idx * colStep + colStep / 2;
+        const x = cx - barWidth / 2;
+        const barHeight = d.hasData ? (d.value / maxVal) * (plotHeight - topMargin) : 0;
+        const yTop = plotHeight - barHeight;
+
+        d.cx = cx;
+        d.yTop = yTop;
+
+        svgHtml += `
+          <text x="${cx}" y="${plotHeight + 14}" text-anchor="middle" class="chart-axis-text" font-size="${gran === 'daily' ? '9.5' : '11'}">${d.bottomChar}</text>
+          ${d.bottomNum ? `<text x="${cx}" y="${plotHeight + 27}" text-anchor="middle" class="chart-axis-text" font-size="10" font-weight="800" fill="var(--genesis-text)">${d.bottomNum}</text>` : ''}
         `;
 
-        if (d.hasPS) {
-          const pinY = yTop - 16;
-          svgHtml += `
-            <g transform="translate(${cx}, ${pinY})">
-              <circle cx="0" cy="0" r="8" fill="var(--genesis-orange)" />
-              <path d="M 0 8 L 2.5 11.5 L -2.5 11.5 Z" fill="var(--genesis-orange)" />
-              <text x="0" y="3" text-anchor="middle" fill="#ffffff" font-size="9" font-weight="900" font-family="-apple-system, sans-serif">P</text>
-            </g>
-          `;
+        if (d.hasData) {
+          if (service === "ev") {
+            const nightVal = isDollar ? d.costNight : d.kwNight;
+            const dayVal = isDollar ? d.costDay : d.kwDay;
+
+            const nightHeight = (nightVal / maxVal) * (plotHeight - topMargin);
+            const dayHeight = (dayVal / maxVal) * (plotHeight - topMargin);
+
+            const yNightTop = plotHeight - nightHeight;
+            const yDayTop = yNightTop - dayHeight;
+
+            svgHtml += `
+              <rect x="${x}" y="${yNightTop}" width="${barWidth}" height="${nightHeight}" fill="var(--genesis-teal)" rx="${dayHeight > 0 ? 0 : 2.5}" />
+            `;
+
+            if (dayHeight > 0) {
+              svgHtml += `
+                <rect x="${x}" y="${yDayTop}" width="${barWidth}" height="${dayHeight}" fill="var(--genesis-orange)" rx="2.5" />
+              `;
+            }
+          } else {
+
+            svgHtml += `
+              <rect x="${x}" y="${yTop}" width="${barWidth}" height="${barHeight}" fill="${barColor}" rx="2.5" />
+            `;
+
+            if (d.hasPS) {
+              const pinY = yTop - 16;
+              svgHtml += `
+                <g transform="translate(${cx}, ${pinY})">
+                  <circle cx="0" cy="0" r="8" fill="var(--genesis-orange)" />
+                  <path d="M 0 8 L 2.5 11.5 L -2.5 11.5 Z" fill="var(--genesis-orange)" />
+                  <text x="0" y="3" text-anchor="middle" fill="#ffffff" font-size="9" font-weight="900" font-family="-apple-system, sans-serif">P</text>
+                </g>
+              `;
+            }
+          }
         }
+
+        svgHtml += `
+          <rect x="${cx - colStep / 2}" y="0" width="${colStep}" height="${chartHeight}" fill="transparent" class="chart-col-hit" data-col="${idx}" style="cursor:pointer;" />
+        `;
+      });
+
+      svg.innerHTML = svgHtml;
+      this._currentDetailData = detailData;
+
+      // Render Historical Legend
+      const legend = this._el("usage-legend");
+      if (service === "ev") {
+        legend.innerHTML = `
+          <div class="legend-item">
+            <span class="legend-dot" style="background:var(--genesis-teal)"></span>
+            <span>🌙 Night (Off-Peak)</span>
+          </div>
+          <div class="legend-item">
+            <span class="legend-dot" style="background:var(--genesis-orange)"></span>
+            <span>☀️ Day (Standard)</span>
+          </div>
+        `;
+      } else {
+        legend.innerHTML = `
+          <div class="legend-item">
+            <span class="legend-dot" style="background:${barColor}"></span>
+            <span>${escapeHtml(serviceLabel)}</span>
+          </div>
+          ${(this._hasPowerShout && service === "elec") ? `
+            <div class="legend-item">
+              ${PS_PIN_SVG}
+              <span>Power Shout</span>
+            </div>
+          ` : ''}
+        `;
       }
 
-      svgHtml += `
-        <rect x="${cx - colStep / 2}" y="0" width="${colStep}" height="${chartHeight}" fill="transparent" class="chart-col-hit" data-col="${idx}" style="cursor:pointer;" />
-      `;
-    });
-
-    svg.innerHTML = svgHtml;
-    this._currentDetailData = detailData;
-
-    // Render Historical Legend
-    const legend = this._el("usage-legend");
-    legend.innerHTML = `
-      <div class="legend-item">
-        <span class="legend-dot" style="background:${barColor}"></span>
-        <span>${escapeHtml(serviceLabel)}</span>
-      </div>
-      ${(this._hasPowerShout && service === "elec") ? `
-        <div class="legend-item">
-          ${PS_PIN_SVG}
-          <span>Power Shout</span>
-        </div>
-      ` : ''}
-    `;
-
-    this._loadingDetail = false;
+    } catch (err) {
+      console.warn("[Genesis Card] Error rendering usage chart:", err);
+    } finally {
+      this._loadingDetail = false;
+      this._showChartLoading(false);
+    }
   }
 
   _updateSummary(entities) {

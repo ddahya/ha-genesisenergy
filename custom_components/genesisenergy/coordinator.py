@@ -26,7 +26,7 @@ from .const import (
     DATA_API_WIDGET_SIDEKICK, DATA_API_WIDGET_DASHBOARD_POWERSHOUT,
     DATA_API_GENERATION_MIX_REALTIME, DATA_API_EV_PLAN_USAGE,
     DATA_API_ELECTRICITY_FORECAST, DATA_API_LPG_DETAILS, DAILY_OVERWRITE_HOUR,
-    REDEEMED_STORE_VERSION, REDEEMED_KEEP_DAYS
+    REDEEMED_STORE_VERSION, REDEEMED_KEEP_DAYS, USAGE_VAULT_VERSION
 )
 
 if TYPE_CHECKING:
@@ -44,11 +44,16 @@ class GenesisEnergyDataUpdateCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         self.usage_cache: dict[str, Any] = {}
         self._prefetched: bool = False
 
-        # Local storage for redeemed past hours
+
         self._redeemed_store: Store = Store(
             hass, REDEEMED_STORE_VERSION, f"{DOMAIN}_redeemed_hours_{entry.entry_id}"
         )
         self._redeemed_hours: set[str] | None = None
+
+        self._vault_store: Store = Store(
+            hass, USAGE_VAULT_VERSION, f"{DOMAIN}_usage_vault_{entry.entry_id}"
+        )
+        self._vault_data: dict[str, dict[str, Any]] | None = None
 
         def _on_token_updated(new_refresh_token: str):
             """Persist rotated 90-day refresh token quietly without triggering a reload."""
@@ -103,6 +108,60 @@ class GenesisEnergyDataUpdateCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         await self._redeemed_store.async_save({"hours": sorted(list(self._redeemed_hours))})
         LOGGER.debug("Recorded %d redeemed hours to local store (total stored: %d)", len(added), len(self._redeemed_hours))
 
+    async def _async_load_vault(self) -> dict[str, dict[str, Any]]:
+        """Load the multi-year usage vault from disk."""
+        if self._vault_data is None:
+            stored = await self._vault_store.async_load()
+            if isinstance(stored, dict):
+                self._vault_data = {
+                    "electricity": stored.get("electricity", {}),
+                    "gas": stored.get("gas", {}),
+                    "ev": stored.get("ev", {}),
+                }
+            else:
+                self._vault_data = {"electricity": {}, "gas": {}, "ev": {}}
+        return self._vault_data
+
+    async def async_save_usage_to_vault(self, fuel: str, items: list[dict[str, Any]]) -> None:
+        """Merge incoming daily usage items into the permanent vault."""
+        if not items or not isinstance(items, list):
+            return
+        vault = await self._async_load_vault()
+        fuel_key = "gas" if fuel in ["gas", "naturalGas", "natural_gas"] else ("ev" if fuel == "ev" else "electricity")
+        if fuel_key not in vault:
+            vault[fuel_key] = {}
+
+        updated = False
+        for item in items:
+            if not isinstance(item, dict):
+                continue
+            raw_date = item.get("startDate") or item.get("date")
+            if not raw_date:
+                continue
+            day_key = str(raw_date)[:10]
+            vault[fuel_key][day_key] = item
+            updated = True
+
+        if updated:
+            await self._vault_store.async_save(vault)
+            LOGGER.debug("Vault: Archived %d days for %s (total days stored: %d)", len(items), fuel_key, len(vault[fuel_key]))
+
+    def get_vault_days(self, fuel: str, start_date: str, end_date: str) -> list[dict[str, Any]]:
+        """Retrieve sorted daily records from vault between start_date and end_date."""
+        if self._vault_data is None:
+            return []
+        fuel_key = "gas" if fuel in ["gas", "naturalGas", "natural_gas"] else ("ev" if fuel == "ev" else "electricity")
+        fuel_vault = self._vault_data.get(fuel_key, {})
+
+        start_key = str(start_date)[:10]
+        end_key = str(end_date)[:10]
+        matching = [
+            item for day_key, item in fuel_vault.items()
+            if start_key <= day_key <= end_key
+        ]
+        matching.sort(key=lambda x: str(x.get("startDate") or x.get("date") or ""))
+        return matching
+    
     def _booked_hour_starts(self, bookings_data: Any) -> set[str]:
         """Return timestamps already covered by existing bookings."""
         if not isinstance(bookings_data, dict):
@@ -134,10 +193,9 @@ class GenesisEnergyDataUpdateCoordinator(DataUpdateCoordinator[dict[str, Any]]):
 
     async def _async_update_data(self) -> dict[str, Any]:
         try:
+            await self._async_load_vault()
             data = await self._async_fetch_all_data()
-            if not self._prefetched:
-                self.hass.async_create_task(self.async_prefetch_current_year_usage())
-                self._prefetched = True
+            self.hass.async_create_task(self.async_prefetch_current_year_usage())
             return data
         except (InvalidAuth, CannotConnect, ApiError) as err:
             raise UpdateFailed(f"Error communicating with API: {err}") from err
@@ -175,8 +233,13 @@ class GenesisEnergyDataUpdateCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                     fuel = "gas" if "gas" in key else "electricity"
                     gran = "MONTHLY" if "monthly" in key else "DAILY"
                     cache_key = f"{fuel}_{gran}_{args[0]}_{args[1]}"
-                    self.usage_cache[cache_key] = res.get("usage", [])
-                    LOGGER.debug("Pre-fetched and cached %s data (%d items)", key, len(res.get("usage", [])))
+                    usage_list = res.get("usage", [])
+                    self.usage_cache[cache_key] = usage_list
+                    self.usage_cache[f"{fuel}_{gran}_current"] = usage_list
+                    if gran == "DAILY" and usage_list:
+                        self.hass.async_create_task(self.async_save_usage_to_vault(fuel, usage_list))
+                    LOGGER.debug("Pre-fetched and cached %s data (%d items)", key, len(usage_list))
+                
                 await asyncio.sleep(0.4)
             except Exception as e:
                 LOGGER.debug("Background pre-fetch skipped for %s: %s", key, e)
@@ -266,6 +329,11 @@ class GenesisEnergyDataUpdateCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         if DATA_API_BILLING_PLANS in fetched_data:
             self._detect_account_services(fetched_data.get(DATA_API_BILLING_PLANS))
 
+        if DATA_API_EV_PLAN_USAGE in fetched_data:
+            ev_items = fetched_data[DATA_API_EV_PLAN_USAGE]
+            if isinstance(ev_items, list) and ev_items:
+                self.hass.async_create_task(self.async_save_usage_to_vault("ev", ev_items))
+
         bill_v2 = fetched_data.get(DATA_API_WIDGET_BILLS_V2)
         if bill_v2 and isinstance(bill_v2, dict) and bill_v2.get("billEstimated"):
             fetched_data[DATA_API_WIDGET_SIDEKICK] = bill_v2.get("billEstimated")
@@ -311,7 +379,6 @@ class GenesisEnergyDataUpdateCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                         supply_agreement_id=selected_sa_id
                     )
                     
-                    # Filter out already redeemed or booked hours
                     if rec_hours and isinstance(rec_hours, dict) and "recommendedHours" in rec_hours:
                         redeemed = await self._async_redeemed_hours()
                         booked = self._booked_hour_starts(fetched_data.get(DATA_API_POWERSHOUT_BOOKINGS))
@@ -330,7 +397,6 @@ class GenesisEnergyDataUpdateCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                     LOGGER.debug("Could not fetch recommended Power Shout hours: %s", err)
                     fetched_data[DATA_API_POWERSHOUT_RECOMMENDED_HOURS] = None
 
-        # LPG handling
         if self.has_lpg or not self._services_detected:
             lpg_details = {}
             try:

@@ -98,7 +98,7 @@ async def _async_register_lovelace_card(hass: HomeAssistant) -> None:
 })
 @websocket_api.async_response
 async def ws_get_usage(hass: HomeAssistant, connection: websocket_api.ActiveConnection, msg: dict) -> None:
-    """Fetch on-demand usage directly from Genesis API with caching & date bounds protection."""
+    """Fetch on-demand usage directly from Genesis API with vault persistence & caching."""
     domain_data = hass.data.get(DOMAIN, {})
     coordinator = None
     for item in domain_data.values():
@@ -115,13 +115,30 @@ async def ws_get_usage(hass: HomeAssistant, connection: websocket_api.ActiveConn
     end_date = msg["end_date"]
     interval = msg["interval_type"]
 
+    today = dt_util.now().date()
+    today_str = today.strftime("%Y-%m-%d")
+    current_month_start = f"{today.year}-{today.month:02d}-01"
+
+    is_current_period_query = (
+        (interval == "MONTHLY" and start_date == f"{today.year}-01-01") or
+        (interval == "DAILY" and start_date == current_month_start)
+    )
+
+    norm_key = f"{fuel}_{interval}_current"
+    if is_current_period_query and norm_key in coordinator.usage_cache:
+        connection.send_result(msg["id"], {"usage": coordinator.usage_cache[norm_key]})
+        return
+
     cache_key = f"{fuel}_{interval}_{start_date}_{end_date}"
-    if cache_key in coordinator.usage_cache:
+    if not is_current_period_query and cache_key in coordinator.usage_cache:
         connection.send_result(msg["id"], {"usage": coordinator.usage_cache[cache_key]})
         return
 
-    today = dt_util.now().date()
-    today_str = today.strftime("%Y-%m-%d")
+    if interval == "DAILY" and not is_current_period_query:
+        vault_days = coordinator.get_vault_days(fuel, start_date, end_date)
+        if vault_days and len(vault_days) >= 25:
+            connection.send_result(msg["id"], {"usage": vault_days})
+            return
 
     if interval == "MONTHLY":
         year = start_date[:4]
@@ -142,8 +159,25 @@ async def ws_get_usage(hass: HomeAssistant, connection: websocket_api.ActiveConn
         else:
             data = await coordinator.api.get_ev_plan_usage()
 
-        usage_list = data.get("usage", []) if isinstance(data, dict) else []
-        coordinator.usage_cache[cache_key] = usage_list
+        if isinstance(data, list):
+            usage_list = data
+        elif isinstance(data, dict):
+            usage_list = data.get("usage", [])
+        else:
+            usage_list = []
+
+        if interval == "DAILY" and usage_list:
+            await coordinator.async_save_usage_to_vault(fuel, usage_list)
+            if fuel == "ev":
+                accumulated = coordinator.get_vault_days("ev", start_date, end_date)
+                if accumulated:
+                    usage_list = accumulated
+
+        if is_current_period_query:
+            coordinator.usage_cache[norm_key] = usage_list
+        else:
+            coordinator.usage_cache[cache_key] = usage_list
+
         connection.send_result(msg["id"], {"usage": usage_list})
     except Exception as err:
         LOGGER.error("Error fetching Genesis usage via websocket: %s", err)
@@ -288,7 +322,6 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
                     break
 
             if successful_bookings > 0:
-                # Record to persistent local store so past redeemed hours leave the list immediately
                 await coordinator.async_record_redeemed(booked_timestamps)
 
                 time_str = base_start_dt.strftime('%-I:%M %p')

@@ -21,6 +21,7 @@ DAILY_OVERWRITE_HOUR: Final = 13
 # --- Local Store for Redeemed Past Hours ---
 REDEEMED_STORE_VERSION: Final = 1
 REDEEMED_KEEP_DAYS: Final = 60
+USAGE_VAULT_VERSION: Final = 1
 
 # --- API Data Keys for Coordinator ---
 DATA_API_ELECTRICITY_USAGE: Final = "api_electricity_usage"
