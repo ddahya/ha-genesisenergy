@@ -140,6 +140,11 @@ hidden_services:
 # show_elec: false            # Set false to hide Electricity subtab (also accepts: show_electricity)
 # show_recent: false          # Set false to hide the Recent billing cycle view
 
+# --- Custom Status Banner Colors ---
+live_banner_color: "#00e676"       # Free power now banner (green, cyan, orange, etc.)
+offer_banner_color: "#ffea00"      # Promotional "+1 hr" offer banner & button
+expiring_banner_color: "#ff3d00"   # Expiring hours alert warning bar
+
 # --- Cache / Debug (Optional) ---
 # clear_cache: true           # Automatically flushes client-side browser sessionStorage upon card load (useful for fixing incorrect data)
 
