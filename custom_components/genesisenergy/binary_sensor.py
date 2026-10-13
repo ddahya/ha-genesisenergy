@@ -36,11 +36,9 @@ async def async_setup_entry(
 
     entities: list[BinarySensorEntity] = []
 
-    # 1. Offers Available Sensor
     if coordinator.data.get(DATA_API_POWERSHOUT_OFFERS) is not None or coordinator.data.get(DATA_API_POWERSHOUT_BALANCE) is not None:
         entities.append(PowerShoutOffersAvailableBinarySensor(coordinator))
 
-    # 2. Bookings Tracking Sensors
     if coordinator.data.get(DATA_API_POWERSHOUT_BOOKINGS) is not None:
         entities.append(PowerShoutBookingInProgressBinarySensor(coordinator))
         entities.append(PowerShoutBookingUpcomingBinarySensor(coordinator))
@@ -99,14 +97,12 @@ class PowerShoutBookingInProgressBinarySensor(
         """Schedule listeners to accurately track live boundaries."""
         await super().async_added_to_hass()
 
-        # Fast 2-minute interval to detect mid-hour booked sessions
         self.async_on_remove(
             async_track_time_interval(
                 self.hass, self._async_refresh_bookings, self._POLL_INTERVAL
             )
         )
 
-        # Exact :00 boundary trigger to flip OFF the instant a session ends
         self.async_on_remove(
             async_track_time_change(
                 self.hass, self._async_refresh_bookings, minute=0, second=0
