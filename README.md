@@ -17,7 +17,7 @@ A custom integration for Home Assistant to connect with Genesis Energy (New Zeal
 * 🛠️ **Automatic Data Correction (Options Flow):**
   * Built-in option to schedule a daily automatic statistic overwrite after 1:00 PM to fix delayed or missing hourly data reported by Genesis.
 * 🎁 **Advanced Power Shout Management:**
-  * Sensors for **Eligibility**, **Balance (Hours)**, and **Offers Available**.
+  * Sensors for **Eligibility**, **Balance (Hours)**, and **Offers Available**
   * **Retroactive Bookings:** Book free Power Shout hours for past dates (up to 31 days prior).
   * **Top 5 Recommended Past Hours:** Exposes `recommended_hours`, `recommended_hours_count`, and `top_recommended_hour` attributes on your balance sensor, pinpointing the highest-cost hours to redeem for maximum savings.
 * 🌿 **Real-Time Eco Tracker:**
@@ -34,6 +34,8 @@ A custom integration for Home Assistant to connect with Genesis Energy (New Zeal
 * ⚡ **Electricity Forecast Sensors:**
   * Exposes `Today's Forecast Usage (kWh)` and `Today's Forecast Cost ($)`.
   * Extra attributes provide predicted high/low ranges and full 7-day forecast data.
+* 🏷️ **Usage Breakdown Sensors:**
+  * Categorizes electricity consumption by `Appliances`, `Electronics`, `Lighting`, and `Other` (in kWh).
 * 🔒 **Modern Architecture & Concurrency:**
   * **Azure AD B2C with PKCE:** Secure authentication with permanent 90-day background token rotation—no session drops or verification code prompts on restart.
   * **Two-Step Verification:** Built-in fallback flow in Home Assistant if Genesis requests a two-step code.

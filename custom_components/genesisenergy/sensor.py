@@ -128,6 +128,9 @@ async def async_setup_entry(hass: HomeAssistant, config_entry: ConfigEntry, asyn
     if not has_electricity and coordinator.data.get(DATA_API_ELECTRICITY_USAGE):
         has_electricity = True
 
+    if not has_electricity and coordinator.data.get(DATA_API_ELECTRICITY_USAGE):
+        has_electricity = True
+
     if has_electricity:
         elec_sensor = GenesisEnergyStatisticsSensor(coordinator, "Electricity")
         entities.append(elec_sensor)
