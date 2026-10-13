@@ -353,7 +353,6 @@ class GenesisEnergyApi:
         except json.JSONDecodeError as e: 
             raise CannotConnect(f"Invalid JSON from {description}: {e}") from e
 
-    # ── Usage Endpoints ──
     async def get_energy_data(self, days_to_fetch: int = 4):
         now_local = dt_util.now()
         from_date = (now_local - timedelta(days=days_to_fetch)).strftime("%Y-%m-%d")
@@ -382,7 +381,6 @@ class GenesisEnergyApi:
         params = {'startDate': start_date_str, 'endDate': end_date_str, 'intervalType': interval_type}
         return await self._make_api_call("GET", "/v2/private/naturalgas/advanced/usage", params=params, description=f"gas usage for {start_date_str}-{end_date_str}")
 
-    # ── Power Shout Endpoints ──
     async def get_powershout_info(self): 
         return await self._make_api_call("GET", "/v2/private/powershoutcurrency/eligible/accounts", description="Power Shout eligible accounts info")
 
@@ -441,7 +439,6 @@ class GenesisEnergyApi:
         response = await self._make_api_call("POST", "/v2/private/powershoutcurrency/offer/accept", json_payload=payload, description="accept Power Shout offer", expect_json=False)
         return response.get("status") == 200
 
-    # ── Billing & Account Endpoints ──
     async def get_billing_plans(self): 
         return await self._make_api_call("GET", "/v2/private/billing/plans", description="billing plans")
 
@@ -488,7 +485,6 @@ class GenesisEnergyApi:
     async def get_next_best_action(self): 
         return await self._make_api_call("GET", "/v2/private/nextBestAction", description="next best action")
 
-    # ── LPG Endpoints ──
     async def get_lpg_order_status(self): 
         return await self._make_api_call("GET", "/v2/private/lpg/orderStatus", description="LPG order status")
 
