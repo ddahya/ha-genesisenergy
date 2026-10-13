@@ -44,7 +44,6 @@ class GenesisEnergyConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                 if res == "MFA_REQUIRED":
                     return await self.async_step_mfa()
                 
-                # Direct PKCE login succeeded
                 _LOGGER.info("Config flow: PKCE direct authentication successful.")
                 return self.async_create_entry(
                     title=INTEGRATION_NAME,
