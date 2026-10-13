@@ -17,7 +17,7 @@ A custom integration for Home Assistant to connect with Genesis Energy (New Zeal
 * 🛠️ **Automatic Data Correction (Options Flow):**
   * Built-in option to schedule a daily automatic statistic overwrite after 1:00 PM to fix delayed or missing hourly data reported by Genesis.
 * 🎁 **Advanced Power Shout Management:**
-  * Sensors for **Eligibility**, **Balance (Hours)**, and **Offers Available** (`binary_sensor.genesis_energy_power_shout_offers_available`).
+  * Sensors for **Eligibility**, **Balance (Hours)**, and **Offers Available**
   * **Retroactive Bookings:** Book free Power Shout hours for past dates (up to 31 days prior).
   * **Top 5 Recommended Past Hours:** Exposes `recommended_hours`, `recommended_hours_count`, and `top_recommended_hour` attributes on your balance sensor, pinpointing the highest-cost hours to redeem for maximum savings.
 * 🌿 **Real-Time Eco Tracker:**
@@ -41,6 +41,13 @@ A custom integration for Home Assistant to connect with Genesis Energy (New Zeal
   * **Two-Step Verification:** Built-in fallback flow in Home Assistant if Genesis requests a two-step code.
   * **Service-Aware Polling:** Only queries endpoints matching your active services, cutting hourly API calls by up to 80%.
   * **Concurrency Throttling:** Throttles concurrent API requests to avoid Cloudflare `500`/`502` connection drops.
+* 🎴 **Built-in Lovelace Card (`custom:genesisenergy-powershout-card`):**
+  * **Auto-Registered**: No manual JavaScript resource copying or manual Lovelace resource URLs needed—loads automatically on boot.
+  * **Interactive Power Shout Engine**: Book upcoming sessions, cancel scheduled/in-progress sessions to refund hours, or claim top-saving past hours from the last 31 days with 1-click confirmation dialogs.
+  * **Animated Status Banners**: Pulsing glowing banners for active free power sessions, available bonus offers to claim, and expiring hours warnings.
+  * **Recent Usage Stacked Graph**: Recreates the Genesis portal’s daily stacked bar chart (Electricity in Orange, Gas in Plum) with cycle progress tracking and hover tooltips.
+  * **Detailed Analytics (Monthly & Daily)**: Dedicated charts for Electricity, Natural Gas usage with date navigator and instant click-to-drilldown from Monthly to Daily.
+  * **Current Bill & Direct Debit Tracker**: Displays current invoice totals, due dates, and direct debit notifications.
 
 ---
 
@@ -70,11 +77,90 @@ A custom integration for Home Assistant to connect with Genesis Energy (New Zeal
 4. If prompted for two-step verification, enter the code sent to your email.
 5. Click **Submit**.
 
+
 ### Integration Options (Auto-Correction)
 1. Go to **Settings > Devices & Services > Genesis Energy**.
 2. Click **Configure**.
 3. Toggle **Enable Auto-Correction**. When enabled, the integration performs a daily statistics check after 1:00 PM to correct any delayed or revised hourly data reported by Genesis.
+---
 
+## 🚀 First-Time Setup (Energy Dashboard & Historical Data)
+
+Upon initial installation, the integration retrieves the last **4 days** of recent interval data to initialise your account sensors. It does not automatically import deep historical data giving you full control over how much historical data you want to import into Home Assistant's Long-Term Statistics database.
+
+**To populate your Energy Dashboard history:**
+
+1. **Want full historical data? (Recommended)**
+   * Go to **Developer Tools** → **Actions** (or Services).
+   * Call `genesisenergy.backfill_statistics` with:
+     * `fuel_type: both` (or `electricity` / `gas`)
+     * `days_to_fetch`: Set to your preferred history length (e.g., `365` for a full year, up to `730` for 2 years).
+   * *This establishes your cumulative baseline without midnight spikes and creates an accurate historical archive of your Genesis data.*
+
+2. **Only require recent data?**
+   * If you do not need past historical records, you don't need to run a backfill. 
+   * Calling `genesisenergy.force_update` or waiting for the next scheduled poll will import the rolling 4-day window into your Energy Dashboard, which will continue accumulating daily going forward.
+
+> [!TIP]
+> **Backfill Note:** Depending on how many days you request, a full year backfill can take 30–60 seconds to process. You can monitor progress in **Settings** → **System** → **Logs**.
+
+---
+
+## 🎴 The Custom Lovelace Card
+
+The integration serves and auto-registers `powershout-card.js`. No separate script or helper automations are required, all booking, cancelling, and offer redemptions run natively inside the card.
+
+
+![Energy Dashboard Reporting](/Power_Shout_Card.png "Energy Dashboard Reporting")
+
+### Quick Start (Add to Dashboard)
+
+In your dashboard, click **Add Card**, search for **Genesis Energy - Power Shout & Account Card**, or select **Manual**, and paste:
+
+```yaml
+type: custom:genesisenergy-powershout-card
+```
+The card **auto-discovers** your Genesis entities for your active property with no further configuration required.
+
+Full Configuration Options
+```yaml
+# --- Display & Behavior ---
+title: "My Home"              # Custom card title override (default: "Genesis Energy")
+show_powershout: auto         # 'auto' (detects eligibility), 'true' (force on), or 'false' (force off)
+default_tab: usage            # Tab to open by default: 'shout', 'usage', 'past', 'forecast', or 'summary'
+chart_days: 17                # Number of days in the top Recent Usage chart (default: 17)
+
+# --- Service Filtering ---
+# Hide subtabs/services from the Usage tab. Accepts a list or comma-separated string ('ev', 'gas', 'elec', 'recent')
+hidden_services:
+  - ev
+  # - gas
+
+# Alternatively, individual boolean toggles can be used:
+# show_ev: false              # Set false to hide EV subtab
+# show_gas: false             # Set false to hide Natural Gas subtab (also accepts: show_natural_gas)
+# show_elec: false            # Set false to hide Electricity subtab (also accepts: show_electricity)
+# show_recent: false          # Set false to hide the Recent billing cycle view
+
+# --- Custom Status Banner Colors ---
+live_banner_color: "#00e676"       # Free power now banner (green, cyan, orange, etc.)
+offer_banner_color: "#ffea00"      # Promotional "+1 hr" offer banner & button
+expiring_banner_color: "#ff3d00"   # Expiring hours alert warning bar
+
+# --- Cache / Debug (Optional) ---
+# clear_cache: true           # Automatically flushes client-side browser sessionStorage upon card load (useful for fixing incorrect data)
+
+# --- Entity ID Overrides (Optional - auto-discovered by default) ---
+entity_balance: sensor.genesis_energy_power_shout_balance
+entity_eligible: sensor.genesis_energy_power_shout_eligible
+entity_offers_available: binary_sensor.genesis_energy_power_shout_offers_available
+entity_account_details: sensor.genesis_energy_account_details
+entity_bill_total_used: sensor.genesis_energy_genesis_bill_total_used
+entity_estimated_bill: sensor.genesis_energy_genesis_bill_estimated_total
+entity_forecast_cost: sensor.genesis_energy_today_s_forecast_cost
+entity_forecast_usage: sensor.genesis_energy_today_s_forecast_usage
+entity_lpg: sensor.genesis_energy_lpg_details
+```
 ---
 
 ## 📈 Energy Dashboard Setup
@@ -83,15 +169,15 @@ To add Genesis Energy data to your Home Assistant Energy Dashboard:
 
 1. Go to **Settings > Dashboards > Energy**.
 2. Under **Electricity Grid**, click **Add Consumption** and select:
-   * `Genesis Electricity Consumption Daily` (`sensor.genesis_energy_electricity_consumption_daily`)
+   * `Genesis Electricity Consumption Daily`
 3. Under **Gas Consumption**, click **Add Gas Source** and select:
-   * `Genesis Gas Consumption Daily` (`sensor.genesis_energy_gas_consumption_daily`)
+   * `Genesis Gas Consumption Daily`
 
 ---
 
 ## 🛠️ Actions & Services
 
-This integration provides four actions/services to manage your account and statistics.
+This integration provides five actions/services to manage your account and statistics.
 
 ### 1. `genesisenergy.backfill_statistics`
 Imports historical usage data from Genesis into Home Assistant's long-term statistics database.
@@ -109,12 +195,24 @@ Books a Power Shout session directly from Home Assistant. Automatically detects 
 
 | Field | Type | Description | Example |
 | :--- | :--- | :--- | :--- |
-| `start_datetime` | `datetime` | **Required.** Local start date and time for the booking. | `"2026-08-15 18:00:00"` |
+| `start_datetime` | `datetime` | **Required.** Local start date and time for the booking (on the hour). | `"2026-08-15 18:00:00"` |
 | `duration_hours` | `integer` | **Required.** Duration in hours (1–4). | `1` |
 
 ---
 
-### 3. `genesisenergy.accept_powershout_offer`
+### 3. `genesisenergy.cancel_powershout_booking`
+Cancels an upcoming scheduled Power Shout session. Automatically resolves your loyalty account details to authorise the cancellation with Genesis.
+
+| Field | Type | Description | Example |
+| :--- | :--- | :--- | :--- |
+| `booking_id` | `string` | **Required.** The unique ID of the upcoming Power Shout booking to cancel. | `"12345678-abcd-1234-abcd-1234567890ab"` |
+
+> [!TIP]
+> **Usage Note:** You can view all upcoming booking IDs in the `bookings` attribute of `sensor.genesis_energy_power_shout_balance`. The companion Lovelace card calls this action automatically when you click the **Cancel** button on any booked session.
+
+---
+
+### 4. `genesisenergy.accept_powershout_offer`
 Accepts an available Power Shout offer using the offer GUID.
 
 | Field | Type | Description | Example |
@@ -126,264 +224,12 @@ Accepts an available Power Shout offer using the offer GUID.
 
 ---
 
-### 4. `genesisenergy.force_update`
+### 5. `genesisenergy.force_update`
 Triggers an immediate poll of the Genesis Energy API for all sensors.
 
 | Field | Type | Description | Example |
 | :--- | :--- | :--- | :--- |
 | `fuel_type` | `select` | **Required.** `electricity`, `gas`, or `both`. | `both` |
-
----
-
-## 🤖 Helper Automation Scripts
-
-To make the most of the integration on your dashboard, add these two helper scripts under **Settings > Automations & Scenes > Scripts**:
-
-### Script 1: Accept All Power Shout Offers
-
-This script automatically loops through and accepts all pending Power Shout offers when triggered.
-
-    alias: Accept All Power Shout Offers
-    sequence:
-      - condition: template
-        value_template: >-
-          {{ state_attr('sensor.genesis_energy_power_shout_balance', 'active_offers_count') > 0 }}
-      - repeat:
-          for_each: >-
-            {{ state_attr('sensor.genesis_energy_power_shout_balance', 'active_offers') }}
-          sequence:
-            - data:
-                offer_id: "{{ repeat.item.loyaltyOffer.guid }}"
-              action: genesisenergy.accept_powershout_offer
-            - delay:
-                seconds: 2
-    icon: mdi:auto-fix
-    description: "Accepts all available Power Shout offers from Genesis Energy."
-
-### Script 2: Book a Power Shout (Interactive Form)
-
-This script provides UI selectors (`datetime` picker and a 1-4 hour dropdown) when tapped on your dashboard:
-
-    alias: Book a Power Shout
-    sequence:
-      - data:
-          start_datetime: "{{ start_time }}"
-          duration_hours: "{{ duration }}"
-        action: genesisenergy.add_powershout_booking
-    fields:
-      start_time:
-        name: Start Time
-        description: Select the date and the start hour for your Power Shout.
-        required: true
-        selector:
-          datetime: {}
-      duration:
-        name: Duration
-        description: Select the duration of the Power Shout.
-        required: true
-        selector:
-          select:
-            options:
-              - label: 1 Hour
-                value: "1"
-              - label: 2 Hours
-                value: "2"
-              - label: 3 Hours
-                value: "3"
-              - label: 4 Hours
-                value: "4"
-    mode: single
-    icon: mdi:flash-alert
-    description: "Allows interactive selection of start time and duration to book a Power Shout."
-
----
-
-## 🎨 Dashboard Cards & Templates
-
-Below are pre-built Lovelace cards designed for your dashboard.
-
-### 1. Genesis Summary & Billing Markdown Card
-
-Add a **Markdown** card and paste this Jinja2 template to display your live bill summary, usage breakdown, eco tracker, and active tariffs:
-
-    type: markdown
-    title: Genesis Energy IQ
-    content: >-
-      {% set sidekick_raw = state_attr('sensor.genesis_energy_account_details', 'widget_sidekick') %}
-      {% set plans_raw = state_attr('sensor.genesis_energy_account_details', 'billing_plans') %}
-      {% set eco_raw = state_attr('sensor.genesis_energy_account_details', 'eco_tracker') %}
-      {% set ps_dash_raw = state_attr('sensor.genesis_energy_account_details', 'dashboard_powershout') %}
-      {% set ps_active = is_state('binary_sensor.power_shout_active', 'on') %}
-
-      {% if sidekick_raw is not none and plans_raw is not none %}
-      {% set sidekick = sidekick_raw | from_json %}
-      {% set plans = plans_raw | from_json %}
-
-      {% if ps_active %}
-      # <font color='#9c27b0'>FREE POWER ACTIVE</font>
-      *Your current usage is covered by a Power Shout booking.*
-      {% else %}
-      ### {{ sidekick.titleArea.title }}
-      {% endif %}
-
-      # <font color='{{ "#9c27b0" if ps_active else "#00adef" }}'>${{ sidekick.titleArea.value }}</font>
-
-      **Billing Period:** {{ sidekick.barArea.leftText }}
-
-      **Status:** {{ sidekick.barArea.rightText }}
-
-      ---
-      ### {{ sidekick.billArea.title }}
-      *Forecasted total for this period based on your usage patterns.*
-
-      ---
-      ### Usage Breakdown
-      | Service | Cost |
-      | :--- | :--- |
-      {% for supply in sidekick.supplyTypesArea.supplyTypes -%}
-      | {{ supply.text }} | ${{ supply.value }} |
-      {% endfor %}
-
-      {% if eco_raw is not none %}
-      {% set eco = eco_raw | from_json %}
-      ---
-      ### Eco Tracker
-      <font color='#4caf50'>**{{ eco.percentage }}%**</font> of NZ's power is currently being generated from **{{ eco.source }}**.
-      {% endif %}
-
-      {% if ps_dash_raw is not none %}
-      {% set ps_dash = ps_dash_raw | from_json %}
-      ---
-      ### Power Shout Balance
-      {{ ps_dash.message.description | replace('{{0}}', ps_dash.message.descriptionSubstrings[0].text) }}
-      {% endif %}
-
-      ---
-      ### Active Tariffs
-      {% for site in plans.billingAccountSites -%}
-      {% for supply in site.supplyPoints -%}
-      **{{ supply.supplyTypeDisplay }} ({{ supply.plan }})**
-      {% for tariff in supply.tariffs -%}
-      * {{ tariff.name }}: {{ tariff.value }} {{ tariff.unit }}
-      {% endfor %}
-      {% endfor %}
-      {% endfor %}
-      {% else %}
-      ### Genesis Data Unavailable
-      The integration is currently fetching fresh data from the Genesis API. Please wait a moment for the initial sync to complete.
-      {% endif %}
-
----
-
-### 2. Accept Power Shout Button (Blinking Alert)
-
-A conditional button card using `custom:button-card` that flashes blue when a Power Shout offer is available:
-
-    type: conditional
-    conditions:
-      - condition: state
-        entity: binary_sensor.genesis_energy_power_shout_offers_available
-        state: "on"
-    card:
-      type: custom:button-card
-      entity: binary_sensor.genesis_energy_power_shout_offers_available
-      name: Accept Power Shout Offer(s)
-      icon: mdi:auto-fix
-      show_icon: true
-      styles:
-        card:
-          - background-color: "#1c6e9e"
-          - animation: blink 2s ease infinite
-        name:
-          - color: white
-        icon:
-          - color: "#fdd835"
-      tap_action:
-        action: call-service
-        service: script.accept_all_power_shout_offers
-    grid_options:
-      columns: 6
-      rows: 2
-
----
-
-### 3. Book Power Shout Interactive Card
-
-Tapping this button triggers `script.book_a_power_shout`, prompting you with a pop-up dialog to pick the start date/time and duration:
-
-    type: custom:button-card
-    entity: binary_sensor.power_shout_active
-    name: |
-      [[[ 
-        const balance = states['sensor.genesis_energy_power_shout_balance'].state;
-        return `Book Power Shout`; 
-      ]]]
-    icon: mdi:flash-alert
-    show_icon: true
-    state:
-      - value: "on"
-        styles:
-          card:
-            - background-color: "#9c27b0"
-            - animation: blink 2s ease infinite
-          name:
-            - color: white
-          icon:
-            - color: "#fdd835"
-      - value: "off"
-        styles:
-          card:
-            - background-color: var(--card-background-color)
-          icon:
-            - color: var(--paper-item-icon-color)
-    tap_action:
-      action: more-info
-      entity: script.book_a_power_shout
-
----
-
-### 4. Expiring Power Shouts Warning Card
-
-Displays a mushroom template card when Power Shout hours are approaching expiration:
-
-    type: custom:mushroom-template-card
-    primary: Expiring Power Shouts
-    icon: mdi:timer-sand
-    icon_color: yellow
-    features_position: bottom
-    entity: sensor.genesis_energy_power_shout_balance
-    secondary: >-
-      {{ state_attr('sensor.genesis_energy_power_shout_balance', 'expiring_hours_message') }}
-    visibility:
-      - condition: state
-        entity: binary_sensor.power_shout_hours_expiring
-        state: "on"
-
----
-
-### 5. Quick Account Details Grid Stack
-
-A vertical stack grid displaying current rates, Power Shout balance, and billing cycle status:
-
-    type: vertical-stack
-    cards:
-      - type: grid
-        columns: 2
-        square: false
-        cards:
-          - type: entity
-            entity: sensor.genesis_energy_electricity_ev_low_day
-            name: Current Rate
-            icon: mdi:currency-usd
-          - type: entity
-            entity: sensor.genesis_energy_power_shout_balance
-            name: Power Shout
-            icon: mdi:lightning-bolt
-      - type: entities
-        entities:
-          - entity: sensor.genesis_billing_cycle
-            name: Current Bill Period
-            secondary_info: last-changed
 
 ---
 

@@ -2,7 +2,6 @@
 
 from logging import Logger, getLogger
 from typing import Final
-from .model import GenesisEnergyBinarySensorEntityDescription
 
 LOGGER: Logger = getLogger(__package__)
 DOMAIN: Final = "genesisenergy"
@@ -19,6 +18,11 @@ DEFAULT_SCAN_INTERVAL_HOURS: Final = 1
 CONF_ENABLE_AUTO_CORRECTION: Final = "enable_auto_correction"
 DAILY_OVERWRITE_HOUR: Final = 13
 
+# --- Local Store for Redeemed Past Hours ---
+REDEEMED_STORE_VERSION: Final = 1
+REDEEMED_KEEP_DAYS: Final = 60
+USAGE_VAULT_VERSION: Final = 1
+
 # --- API Data Keys for Coordinator ---
 DATA_API_ELECTRICITY_USAGE: Final = "api_electricity_usage"
 DATA_API_EV_PLAN_USAGE: Final = "api_ev_plan_usage" 
@@ -30,6 +34,7 @@ DATA_API_POWERSHOUT_OFFERS: Final = "api_powershout_offers"
 DATA_API_POWERSHOUT_EXPIRING: Final = "api_powershout_expiring"
 DATA_API_POWERSHOUT_RECOMMENDED_HOURS: Final = "api_powershout_recommended_hours"
 DATA_API_BILLING_PLANS: Final = "api_billing_plans"
+DATA_API_BILLING_SUMMARY: Final = "api_billing_summary"
 DATA_API_WIDGET_HERO: Final = "api_widget_hero"
 DATA_API_WIDGET_BILLS: Final = "api_widget_bill_summary"
 DATA_API_WIDGET_BILLS_V2: Final = "api_widget_bill_summary_v2"
@@ -77,6 +82,12 @@ SENSOR_KEY_BILL_TOTAL_USED: Final = "bill_total_used"
 SENSOR_KEY_BILL_ESTIMATED_TOTAL: Final = "bill_estimated_total"
 SENSOR_KEY_BILL_ESTIMATED_FUTURE: Final = "bill_estimated_future"
 
+# --- Keys for Live Billing Summary Sensors (from billing/summary) ---
+SENSOR_KEY_BILL_BALANCE: Final = "bill_balance"
+SENSOR_KEY_BILL_OVERDUE: Final = "bill_overdue"
+SENSOR_KEY_BILL_DUE_DATE: Final = "bill_due_date"
+SENSOR_KEY_BILL_DUE_DAYS: Final = "bill_due_days"
+
 # --- Keys for EV Plan Sensors ---
 SENSOR_KEY_EV_DAY_USAGE: Final = "ev_day_usage"
 SENSOR_KEY_EV_DAY_COST: Final = "ev_day_cost"
@@ -88,22 +99,18 @@ SENSOR_KEY_EV_TOTAL_SAVINGS: Final = "ev_total_savings"
 SENSOR_KEY_FORECAST_USAGE: Final = "forecast_usage"
 SENSOR_KEY_FORECAST_COST: Final = "forecast_cost"
 
-# --- Keys for Usage Breakdown Sensors ---
-SENSOR_KEY_BREAKDOWN_APPLIANCES: Final = "breakdown_appliances"
-SENSOR_KEY_BREAKDOWN_ELECTRONICS: Final = "breakdown_electronics"
-SENSOR_KEY_BREAKDOWN_LIGHTING: Final = "breakdown_lighting"
-SENSOR_KEY_BREAKDOWN_OTHER: Final = "breakdown_other"
-
 # --- Device Information ---
 DEVICE_MANUFACTURER: Final = "Genesis Energy"
 DEVICE_MODEL: Final = "Online Account"
 
 # --- Service Related Constants ---
 SERVICE_ADD_POWERSHOUT_BOOKING: Final = "add_powershout_booking"
+SERVICE_CANCEL_POWERSHOUT_BOOKING: Final = "cancel_powershout_booking"
 SERVICE_ACCEPT_POWERSHOUT_OFFER: Final = "accept_powershout_offer"
 ATTR_START_DATETIME: Final = "start_datetime"
 ATTR_DURATION_HOURS: Final = "duration_hours"
 ATTR_OFFER_ID: Final = "offer_id"
+ATTR_BOOKING_ID: Final = "booking_id"
 
 SERVICE_BACKFILL_STATISTICS: Final = "backfill_statistics"
 ATTR_DAYS_TO_FETCH: Final = "days_to_fetch"

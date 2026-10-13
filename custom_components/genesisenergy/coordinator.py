@@ -1,13 +1,15 @@
 # custom_components/genesisenergy/coordinator.py
+
 from datetime import datetime, timedelta, timezone
 import asyncio
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any, Iterable
 from zoneinfo import ZoneInfo
 
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
 from homeassistant.helpers.device_registry import DeviceInfo
+from homeassistant.helpers.storage import Store
 from homeassistant.components.recorder.statistics import statistics_during_period
 from homeassistant.components.recorder import get_instance
 from homeassistant.util import dt as dt_util
@@ -19,18 +21,19 @@ from .const import (
     DEVICE_MANUFACTURER, DEVICE_MODEL, DATA_API_ELECTRICITY_USAGE, DATA_API_GAS_USAGE,
     DATA_API_POWERSHOUT_INFO, DATA_API_POWERSHOUT_BALANCE, DATA_API_POWERSHOUT_BOOKINGS,
     DATA_API_POWERSHOUT_OFFERS, DATA_API_POWERSHOUT_EXPIRING, DATA_API_POWERSHOUT_RECOMMENDED_HOURS,
-    DATA_API_BILLING_PLANS, DATA_API_WIDGET_HERO, DATA_API_WIDGET_BILLS_V2,
+    DATA_API_BILLING_PLANS, DATA_API_BILLING_SUMMARY, DATA_API_WIDGET_HERO, DATA_API_WIDGET_BILLS_V2,
     DATA_API_WIDGET_PROPERTY_LIST, DATA_API_WIDGET_PROPERTY_SWITCHER,
     DATA_API_WIDGET_SIDEKICK, DATA_API_WIDGET_DASHBOARD_POWERSHOUT,
     DATA_API_GENERATION_MIX_REALTIME, DATA_API_EV_PLAN_USAGE,
-    DATA_API_ELECTRICITY_FORECAST, DATA_API_LPG_DETAILS, DAILY_OVERWRITE_HOUR
+    DATA_API_ELECTRICITY_FORECAST, DATA_API_LPG_DETAILS, DAILY_OVERWRITE_HOUR,
+    REDEEMED_STORE_VERSION, REDEEMED_KEEP_DAYS, USAGE_VAULT_VERSION
 )
 
 if TYPE_CHECKING:
     from .sensor import GenesisEnergyStatisticsSensor
 
 
-class GenesisEnergyDataUpdateCoordinator(DataUpdateCoordinator[dict[str, any]]):
+class GenesisEnergyDataUpdateCoordinator(DataUpdateCoordinator[dict[str, Any]]):
     config_entry: ConfigEntry
     api: GenesisEnergyApi
     device_info: DeviceInfo
@@ -38,6 +41,19 @@ class GenesisEnergyDataUpdateCoordinator(DataUpdateCoordinator[dict[str, any]]):
     def __init__(self, hass: HomeAssistant, entry: ConfigEntry) -> None:
         self.config_entry = entry
         self._current_options = dict(entry.options)
+        self.usage_cache: dict[str, Any] = {}
+        self._prefetched: bool = False
+
+
+        self._redeemed_store: Store = Store(
+            hass, REDEEMED_STORE_VERSION, f"{DOMAIN}_redeemed_hours_{entry.entry_id}"
+        )
+        self._redeemed_hours: set[str] | None = None
+
+        self._vault_store: Store = Store(
+            hass, USAGE_VAULT_VERSION, f"{DOMAIN}_usage_vault_{entry.entry_id}"
+        )
+        self._vault_data: dict[str, dict[str, Any]] | None = None
 
         def _on_token_updated(new_refresh_token: str):
             """Persist rotated 90-day refresh token quietly without triggering a reload."""
@@ -71,14 +87,162 @@ class GenesisEnergyDataUpdateCoordinator(DataUpdateCoordinator[dict[str, any]]):
         self._services_detected: bool = False
 
         super().__init__(hass, LOGGER, name=DOMAIN, update_interval=timedelta(hours=DEFAULT_SCAN_INTERVAL_HOURS))
+
+    async def _async_redeemed_hours(self) -> set[str]:
+        """Return past hours redeemed through this integration."""
+        if self._redeemed_hours is None:
+            stored = await self._redeemed_store.async_load()
+            hours = stored.get("hours") if isinstance(stored, dict) else None
+            self._redeemed_hours = set(hours) if isinstance(hours, list) else set()
+        return self._redeemed_hours
+
+    async def async_record_redeemed(self, starts: Iterable[str]) -> None:
+        """Record redeemed past hours so they leave the ranked list immediately."""
+        hours = await self._async_redeemed_hours()
+        added = {str(val).replace("Z", "").split(".")[0] for val in starts if val}
+        if not added:
+            return
+        hours.update(added)
+        cutoff = (dt_util.now().date() - timedelta(days=REDEEMED_KEEP_DAYS)).isoformat()
+        self._redeemed_hours = {v for v in hours if v[:10] >= cutoff}
+        await self._redeemed_store.async_save({"hours": sorted(list(self._redeemed_hours))})
+        LOGGER.debug("Recorded %d redeemed hours to local store (total stored: %d)", len(added), len(self._redeemed_hours))
+
+    async def _async_load_vault(self) -> dict[str, dict[str, Any]]:
+        """Load the multi-year usage vault from disk."""
+        if self._vault_data is None:
+            stored = await self._vault_store.async_load()
+            if isinstance(stored, dict):
+                self._vault_data = {
+                    "electricity": stored.get("electricity", {}),
+                    "gas": stored.get("gas", {}),
+                    "ev": stored.get("ev", {}),
+                }
+            else:
+                self._vault_data = {"electricity": {}, "gas": {}, "ev": {}}
+        return self._vault_data
+
+    async def async_save_usage_to_vault(self, fuel: str, items: list[dict[str, Any]]) -> None:
+        """Merge incoming daily usage items into the permanent vault."""
+        if not items or not isinstance(items, list):
+            return
+        vault = await self._async_load_vault()
+        fuel_key = "gas" if fuel in ["gas", "naturalGas", "natural_gas"] else ("ev" if fuel == "ev" else "electricity")
+        if fuel_key not in vault:
+            vault[fuel_key] = {}
+
+        updated = False
+        for item in items:
+            if not isinstance(item, dict):
+                continue
+            raw_date = item.get("startDate") or item.get("date")
+            if not raw_date:
+                continue
+            day_key = str(raw_date)[:10]
+            vault[fuel_key][day_key] = item
+            updated = True
+
+        if updated:
+            await self._vault_store.async_save(vault)
+            LOGGER.debug("Vault: Archived %d days for %s (total days stored: %d)", len(items), fuel_key, len(vault[fuel_key]))
+
+    def get_vault_days(self, fuel: str, start_date: str, end_date: str) -> list[dict[str, Any]]:
+        """Retrieve sorted daily records from vault between start_date and end_date."""
+        if self._vault_data is None:
+            return []
+        fuel_key = "gas" if fuel in ["gas", "naturalGas", "natural_gas"] else ("ev" if fuel == "ev" else "electricity")
+        fuel_vault = self._vault_data.get(fuel_key, {})
+
+        start_key = str(start_date)[:10]
+        end_key = str(end_date)[:10]
+        matching = [
+            item for day_key, item in fuel_vault.items()
+            if start_key <= day_key <= end_key
+        ]
+        matching.sort(key=lambda x: str(x.get("startDate") or x.get("date") or ""))
+        return matching
     
-    async def _async_update_data(self) -> dict[str, any]:
+    def _booked_hour_starts(self, bookings_data: Any) -> set[str]:
+        """Return timestamps already covered by existing bookings."""
+        if not isinstance(bookings_data, dict):
+            return set()
+        bookings = bookings_data.get("bookings")
+        if not isinstance(bookings, list):
+            return set()
+        starts = set()
+        for b in bookings:
+            if isinstance(b, dict) and b.get("startDateTime"):
+                s = str(b["startDateTime"]).replace("Z", "").split(".")[0]
+                starts.add(s)
+                try:
+                    dur = max(1, int(float(b.get("duration") or 1)))
+                    dt = datetime.fromisoformat(s)
+                    for offset in range(dur):
+                        starts.add((dt + timedelta(hours=offset)).strftime("%Y-%m-%dT%H:%M:%S"))
+                        starts.add((dt + timedelta(hours=offset)).strftime("%Y-%m-%d %H:%M:%S"))
+                except Exception:
+                    pass
+        return starts
+
+    def get_loyalty_account_id(self) -> str | None:
+        """Extract the loyalty account ID required by Genesis for booking operations."""
+        ps_info = self.data.get(DATA_API_POWERSHOUT_INFO) if self.data else None
+        if ps_info and isinstance(ps_info, dict):
+            return ps_info.get("loyaltyAccountId")
+        return None
+
+    async def _async_update_data(self) -> dict[str, Any]:
         try:
-            return await self._async_fetch_all_data()
+            await self._async_load_vault()
+            data = await self._async_fetch_all_data()
+            self.hass.async_create_task(self.async_prefetch_current_year_usage())
+            return data
         except (InvalidAuth, CannotConnect, ApiError) as err:
             raise UpdateFailed(f"Error communicating with API: {err}") from err
         except Exception as err:
             raise UpdateFailed(f"Unexpected error updating data: {err}") from err
+
+    async def async_prefetch_current_year_usage(self) -> None:
+        """Background task to pre-fetch current year monthly & current month daily data for instant card display."""
+        now = dt_util.now()
+        year = now.year
+        month = now.month
+        
+        m_start = f"{year}-01-01"
+        m_end = f"{year}-12-31"
+
+        d_start = f"{year}-{month:02d}-01"
+        d_end = now.strftime("%Y-%m-%d")
+
+        LOGGER.debug("Starting background pre-fetch of current year usage data...")
+        await asyncio.sleep(2)
+
+        tasks = [
+            ("elec_monthly", self.api.get_energy_data_for_period, m_start, m_end, "MONTHLY"),
+            ("elec_daily", self.api.get_energy_data_for_period, d_start, d_end, "DAILY"),
+        ]
+
+        if self.has_gas:
+            tasks.append(("gas_monthly", self.api.get_gas_data_for_period, m_start, m_end, "MONTHLY"))
+            tasks.append(("gas_daily", self.api.get_gas_data_for_period, d_start, d_end, "DAILY"))
+
+        for key, coro, *args in tasks:
+            try:
+                res = await coro(*args)
+                if res and isinstance(res, dict) and "usage" in res:
+                    fuel = "gas" if "gas" in key else "electricity"
+                    gran = "MONTHLY" if "monthly" in key else "DAILY"
+                    cache_key = f"{fuel}_{gran}_{args[0]}_{args[1]}"
+                    usage_list = res.get("usage", [])
+                    self.usage_cache[cache_key] = usage_list
+                    self.usage_cache[f"{fuel}_{gran}_current"] = usage_list
+                    if gran == "DAILY" and usage_list:
+                        self.hass.async_create_task(self.async_save_usage_to_vault(fuel, usage_list))
+                    LOGGER.debug("Pre-fetched and cached %s data (%d items)", key, len(usage_list))
+                
+                await asyncio.sleep(0.4)
+            except Exception as e:
+                LOGGER.debug("Background pre-fetch skipped for %s: %s", key, e)
 
     def _detect_account_services(self, plans_data: dict | None) -> None:
         """Inspect billing plans to set active service channels."""
@@ -106,7 +270,7 @@ class GenesisEnergyDataUpdateCoordinator(DataUpdateCoordinator[dict[str, any]]):
             self.has_electricity, self.has_gas, self.has_ev_plan, self.has_powershout
         )
 
-    async def _async_fetch_all_data(self) -> dict[str, any]:
+    async def _async_fetch_all_data(self) -> dict[str, Any]:
         """Fetch targeted API data with concurrency bounds to prevent 502 drops."""
         days_for_regular_fetch = 4
         semaphore = asyncio.Semaphore(8)
@@ -121,8 +285,9 @@ class GenesisEnergyDataUpdateCoordinator(DataUpdateCoordinator[dict[str, any]]):
 
         tasks = []
 
-        # 1. Base Core & Plan Calls
+        # 1. Base Core, Summary & Plan Calls
         tasks.append(_fetch_task(DATA_API_BILLING_PLANS, self.api.get_billing_plans))
+        tasks.append(_fetch_task(DATA_API_BILLING_SUMMARY, self.api.get_billing_summary))
         tasks.append(_fetch_task(DATA_API_WIDGET_BILLS_V2, self.api.get_widget_bill_summary_v2))
         tasks.append(_fetch_task(DATA_API_GENERATION_MIX_REALTIME, self.api.get_generation_mix_realtime))
         tasks.append(_fetch_task(DATA_API_WIDGET_HERO, self.api.get_widget_hero_info))
@@ -164,11 +329,16 @@ class GenesisEnergyDataUpdateCoordinator(DataUpdateCoordinator[dict[str, any]]):
         if DATA_API_BILLING_PLANS in fetched_data:
             self._detect_account_services(fetched_data.get(DATA_API_BILLING_PLANS))
 
+        if DATA_API_EV_PLAN_USAGE in fetched_data:
+            ev_items = fetched_data[DATA_API_EV_PLAN_USAGE]
+            if isinstance(ev_items, list) and ev_items:
+                self.hass.async_create_task(self.async_save_usage_to_vault("ev", ev_items))
+
         bill_v2 = fetched_data.get(DATA_API_WIDGET_BILLS_V2)
         if bill_v2 and isinstance(bill_v2, dict) and bill_v2.get("billEstimated"):
             fetched_data[DATA_API_WIDGET_SIDEKICK] = bill_v2.get("billEstimated")
 
-        # 6. Fetch Top Recommended Past Power Shout Hours
+        # 6. Fetch & Filter Top Recommended Past Power Shout Hours
         ps_info = fetched_data.get(DATA_API_POWERSHOUT_INFO)
         if ps_info and isinstance(ps_info, dict):
             loyalty_id = ps_info.get("loyaltyAccountId")
@@ -208,12 +378,25 @@ class GenesisEnergyDataUpdateCoordinator(DataUpdateCoordinator[dict[str, any]]):
                         icp_number=selected_sp_id,
                         supply_agreement_id=selected_sa_id
                     )
+                    
+                    if rec_hours and isinstance(rec_hours, dict) and "recommendedHours" in rec_hours:
+                        redeemed = await self._async_redeemed_hours()
+                        booked = self._booked_hour_starts(fetched_data.get(DATA_API_POWERSHOUT_BOOKINGS))
+                        filtered = []
+                        for r in rec_hours.get("recommendedHours", []):
+                            dt_str = str(r.get("dateTime", "")).replace("Z", "").split(".")[0]
+                            dt_space = dt_str.replace("T", " ")
+                            if dt_str in redeemed or dt_space in redeemed or dt_str in booked or dt_space in booked:
+                                continue
+                            filtered.append(r)
+                        rec_hours = dict(rec_hours)
+                        rec_hours["recommendedHours"] = filtered
+
                     fetched_data[DATA_API_POWERSHOUT_RECOMMENDED_HOURS] = rec_hours
                 except Exception as err:
                     LOGGER.debug("Could not fetch recommended Power Shout hours: %s", err)
                     fetched_data[DATA_API_POWERSHOUT_RECOMMENDED_HOURS] = None
 
-        # LPG handling
         if self.has_lpg or not self._services_detected:
             lpg_details = {}
             try:
