@@ -153,14 +153,14 @@ class GenesisEnergyApi:
                     if cookie.key == "x-ms-cpim-csrf": 
                         csrf = cookie.value
 
-            # Direct Success with PKCE
+            # 6. Direct Success with PKCE
             if "code=" in loc:
                 auth_code = parse_qs(loc.split('?', 1)[1])['code'][0]
                 await session.close()
                 await self._exchange_code_for_tokens(auth_code)
                 return "SUCCESS"
 
-            # Step 14 confirmation if MFA requested
+            # 7. Confirmation if MFA requested
             url_step14 = f"{self._url_token_base}/{self._p}/api/SelfAsserted/confirmed"
             async with session.get(url_step14, params={"csrf_token": csrf, "tx": tid, "p": self._p}, headers={**base_headers, "Referer": url_s4}) as r14:
                 txt_14 = await r14.text()
