@@ -83,7 +83,6 @@ async def async_setup_entry(hass: HomeAssistant, config_entry: ConfigEntry, asyn
     has_electricity, has_gas = False, False
     billing_plans_data = coordinator.data.get(DATA_API_BILLING_PLANS)
     
-    # 1. DYNAMIC PRICE & PLAN SENSORS (Restores original GenesisPriceSensor unique_ids)
     if billing_plans_data and isinstance(billing_plans_data.get("billingAccountSites"), list):
         for site in billing_plans_data["billingAccountSites"]:
             if not isinstance(site.get("supplyPoints"), list):
@@ -100,14 +99,12 @@ async def async_setup_entry(hass: HomeAssistant, config_entry: ConfigEntry, asyn
                 elif supply_type in ["naturalGas", "gas"]:
                     has_gas = True
 
-                # Plan Name & Term End sensors
                 entities.append(GenesisPlanSensor(coordinator, sp_id, supply_type, supply_display))
 
                 plan_term = sp.get("planTerm") or {}
                 if not plan_term.get("hide") and plan_term.get("endDate"):
                     entities.append(GenesisPlanTermEndSensor(coordinator, sp_id, supply_type, supply_display))
 
-                # Exact Original GenesisPriceSensor: Restores original Unique ID and Name
                 for tariff in sp.get("tariffs", []):
                     if not isinstance(tariff, dict) or not tariff.get("name"):
                         continue
@@ -123,7 +120,6 @@ async def async_setup_entry(hass: HomeAssistant, config_entry: ConfigEntry, asyn
                         )
                     )
 
-                # Discount sensors
                 for discount in sp.get("appliedDiscounts", []):
                     if not isinstance(discount, dict) or not discount.get("name"):
                         continue
@@ -132,7 +128,6 @@ async def async_setup_entry(hass: HomeAssistant, config_entry: ConfigEntry, asyn
     if not has_electricity and coordinator.data.get(DATA_API_ELECTRICITY_USAGE):
         has_electricity = True
 
-    # 2. ELECTRICITY STATISTICS & ECO
     if has_electricity:
         elec_sensor = GenesisEnergyStatisticsSensor(coordinator, "Electricity")
         entities.append(elec_sensor)
@@ -144,13 +139,11 @@ async def async_setup_entry(hass: HomeAssistant, config_entry: ConfigEntry, asyn
         if coordinator.data.get(DATA_API_ELECTRICITY_FORECAST):
             entities.extend([ForecastUsageSensor(coordinator), ForecastCostSensor(coordinator)])
 
-    # 3. GAS STATISTICS
     if has_gas or coordinator.data.get(DATA_API_GAS_USAGE):
         gas_sensor = GenesisEnergyStatisticsSensor(coordinator, "Gas")
         entities.append(gas_sensor)
         coordinator.statistics_sensors.append(gas_sensor)
 
-    # 4. EV PLAN SENSORS
     if coordinator.data.get(DATA_API_EV_PLAN_USAGE):
         LOGGER.info("EV Plan data found. Adding EV plan sensors. ✅")
         entities.extend([
@@ -159,14 +152,12 @@ async def async_setup_entry(hass: HomeAssistant, config_entry: ConfigEntry, asyn
             EVTotalSavingsSensor(coordinator)
         ])
 
-    # 5. CORE POWER SHOUT & ACCOUNT SENSORS
     entities.extend([
         PowerShoutEligibilitySensor(coordinator),
         PowerShoutBalanceSensor(coordinator),
         GenesisEnergyAccountSensor(coordinator)
     ])
     
-    # 6. ESTIMATED BILLING SENSORS (SIDEKICK / BILLS V2)
     if coordinator.data.get(DATA_API_WIDGET_SIDEKICK) or coordinator.data.get(DATA_API_WIDGET_BILLS_V2):
         entities.extend([TotalUsedSensor(coordinator), EstimatedTotalSensor(coordinator), EstimatedFutureUseSensor(coordinator)])
         if has_electricity:
@@ -174,7 +165,6 @@ async def async_setup_entry(hass: HomeAssistant, config_entry: ConfigEntry, asyn
         if has_gas:
             entities.append(GasUsedSensor(coordinator))
 
-    # 7. LIVE BILL SUMMARY SENSORS (from /billing/summary)
     if coordinator.data.get(DATA_API_BILLING_SUMMARY):
         LOGGER.info("Live billing summary data found. Adding live bill balance & due date sensors. ✅")
         entities.extend([
@@ -184,14 +174,10 @@ async def async_setup_entry(hass: HomeAssistant, config_entry: ConfigEntry, asyn
             BillDueDaysSensor(coordinator),
         ])
     
-    # 8. LPG CYLINDERS
     if coordinator.data.get(DATA_API_LPG_DETAILS):
         entities.append(LPGDetailsSensor(coordinator))
     
     async_add_entities(entities)
-
-
-# ── Original Genesis Price Sensor (Preserves original entity IDs) ──────────
 
 class GenesisPriceSensor(CoordinatorEntity[GenesisEnergyDataUpdateCoordinator], SensorEntity):
     _attr_has_entity_name = True
@@ -227,9 +213,6 @@ class GenesisPriceSensor(CoordinatorEntity[GenesisEnergyDataUpdateCoordinator], 
                                 except (ValueError, TypeError):
                                     return None
         return None
-
-
-# ── Plan & Discount Sensors ────────────────────────────────────────────────
 
 class GenesisPlanBaseSensor(CoordinatorEntity[GenesisEnergyDataUpdateCoordinator], SensorEntity):
     _attr_has_entity_name = True
@@ -328,9 +311,6 @@ class GenesisDiscountSensor(GenesisPlanBaseSensor):
                     return None
         return None
 
-
-# ── Live Bill Summary Sensors ──────────────────────────────────────────────
-
 class GenesisBillSummarySensor(CoordinatorEntity[GenesisEnergyDataUpdateCoordinator], SensorEntity):
     _attr_has_entity_name = True
 
@@ -425,9 +405,6 @@ class BillDueDaysSensor(GenesisBillSummarySensor):
             except (ValueError, TypeError):
                 return None
         return None
-
-
-# ── Statistics Updater ─────────────────────────────────────────────────────
 
 class GenesisEnergyStatisticsSensor(CoordinatorEntity[GenesisEnergyDataUpdateCoordinator], SensorEntity):
     _attr_has_entity_name = True
@@ -596,9 +573,6 @@ class GenesisEnergyStatisticsSensor(CoordinatorEntity[GenesisEnergyDataUpdateCoo
         await _process_one_statistic(self._consumption_statistic_id, self._consumption_statistic_name, self._unit, 'kw')
         await _process_one_statistic(self._cost_statistic_id, self._cost_statistic_name, self._currency, 'costNZD')
 
-
-# ── Generation Mix & Forecast ──────────────────────────────────────────────
-
 class GenerationMixSensor(CoordinatorEntity[GenesisEnergyDataUpdateCoordinator], SensorEntity):
     _attr_has_entity_name = True
     _attr_native_unit_of_measurement = "%"
@@ -725,8 +699,6 @@ class ForecastCostSensor(ForecastSensor):
         return t.get("PredictionCost") or t.get("predictionCost")
 
 
-# ── EV Plan Sensors ────────────────────────────────────────────────────────
-
 class GenesisEVPlanSensor(CoordinatorEntity[GenesisEnergyDataUpdateCoordinator], SensorEntity):
     _attr_has_entity_name = True
     _attr_attribution = "Data from latest full day"
@@ -836,9 +808,6 @@ class EVTotalSavingsSensor(GenesisEVPlanSensor):
         if h := self.coordinator.data.get(DATA_API_EV_PLAN_USAGE):
             attrs["history"] = h
         return attrs
-
-
-# ── Core Power Shout & Account Sensors ─────────────────────────────────────
 
 class PowerShoutEligibilitySensor(CoordinatorEntity[GenesisEnergyDataUpdateCoordinator], SensorEntity):
     _attr_has_entity_name = True
@@ -980,8 +949,6 @@ class GenesisEnergyAccountSensor(CoordinatorEntity[GenesisEnergyDataUpdateCoordi
         return attrs
 
 
-# ── Estimated Bill Sensors (Sidekick / Bills V2) ───────────────────────────
-
 class GenesisBillSensor(CoordinatorEntity[GenesisEnergyDataUpdateCoordinator], SensorEntity):
     _attr_has_entity_name = True
     _attr_native_unit_of_measurement = "NZD"
@@ -1099,8 +1066,6 @@ class EstimatedFutureUseSensor(GenesisBillSensor):
                 pass
         return round(max(0.0, ev - uv), 2)
 
-
-# ── LPG Details Sensor ─────────────────────────────────────────────────────
 
 class LPGDetailsSensor(CoordinatorEntity[GenesisEnergyDataUpdateCoordinator], SensorEntity):
     _attr_has_entity_name = True
