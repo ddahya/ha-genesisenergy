@@ -4,10 +4,11 @@
 const CARD_VERSION = "2.0.1";
 const DOMAIN = "genesisenergy";
 
-
-const DAILY_FETCH_PREV_MONTHS = 3;
+// Fixed floor for EV plan (September 2026)
 const EV_START_YEAR = 2026;
-const EV_START_MONTH = 8; 
+const EV_START_MONTH = 8; // 8 = September (0-indexed)
+
+// Cache lifetime for active/ongoing data (4 hours in ms)
 const LIVE_DATA_CACHE_TTL_MS = 4 * 60 * 60 * 1000;
 
 const TAB_SHOUT = "shout";
@@ -170,6 +171,20 @@ const CARD_CSS = `
     color: var(--genesis-text);
     overflow: visible;
     padding: 16px;
+    margin: 0 auto;
+  }
+
+  .card-header {
+    color: var(--ha-card-header-color, var(--primary-text-color, #ffffff));
+    font-family: var(--ha-card-header-font-family, inherit);
+    font-size: var(--ha-card-header-font-size, 20px);
+    font-weight: var(--ha-card-header-font-weight, 700);
+    letter-spacing: -0.015em;
+    line-height: 1.25;
+    margin: 0 0 14px 0;
+    padding: 0 2px;
+    display: block;
+    word-break: break-word;
   }
 
   .hero {
@@ -458,7 +473,6 @@ const CARD_CSS = `
     padding: 2px 6px;
   }
 
-  /* Top Tabs Meter Status Pill (Far Right) */
   .main-sync-badge {
     margin-left: auto;
     font-size: 11.5px;
@@ -540,7 +554,6 @@ const CARD_CSS = `
     color: var(--genesis-text);
   }
 
-  /* Submenu Targeted Sync Button */
   .sync-action-btn {
     appearance: none;
     background: var(--genesis-surface);
@@ -1246,6 +1259,8 @@ function buildTemplate(logoUrl) {
     <style>${CARD_CSS}</style>
     <div class="card">
 
+      <h1 class="card-header" id="card-header-title" hidden></h1>
+
       <div class="hero">
         <div class="hero-left">
           <div class="hero-logo-ps" id="powershout-logo-wrap">
@@ -1315,7 +1330,6 @@ function buildTemplate(logoUrl) {
         <button role="tab" id="tab-forecast" data-tab="${TAB_FORECAST}" aria-selected="false" hidden>Forecast</button>
         <button role="tab" id="tab-summary" data-tab="${TAB_SUMMARY}" aria-selected="false">Summary</button>
 
-        <!-- Top Menu Right-Aligned Meter Status Pill -->
         <div class="main-sync-badge" id="main-meter-sync" style="display:none;margin-left:auto;"></div>
       </div>
 
@@ -1371,7 +1385,6 @@ function buildTemplate(logoUrl) {
               <button data-service="ev" id="btn-subtab-ev" style="display:none;">EV</button>
             </div>
 
-            <!-- Targeted Sync Button located in Submenu Row -->
             <button class="sync-action-btn" id="subtab-sync-btn" title="Sync current view data">
               <svg class="sync-icon" viewBox="0 0 24 24" width="13" height="13" fill="currentColor">
                 <path d="M12 4V1L8 5l4 4V6c3.31 0 6 2.69 6 6 0 1.01-.25 1.97-.7 2.8l1.46 1.46A7.93 7.93 0 0020 12c0-4.42-3.58-8-8-8zm0 14c-3.31 0-6-2.69-6-6 0-1.01.25-1.97.7-2.8L5.24 7.74A7.93 7.93 0 004 12c0 4.42 3.58 8 8 8v3l4-4-4-4v3z"/>
@@ -1535,6 +1548,40 @@ class GenesisPowerShoutCard extends HTMLElement {
     this._popoverOpen = false;
     this._loadingDetail = false;
     this._prefetchTimer = null;
+    this._lastCoordinatorUpdate = null;
+  }
+
+  getCardSize() {
+    return 11;
+  }
+
+  getGridOptions() {
+    return {
+      columns: 12,
+      min_columns: 6,
+    };
+  }
+
+  getLayoutOptions() {
+    return {
+      grid_columns: 12,
+      grid_min_columns: 6,
+      grid_rows: "auto",
+    };
+  }
+
+  static getConfigElement() {
+    return document.createElement("genesisenergy-powershout-card-editor");
+  }
+
+  static getStubConfig(hass) {
+    return {
+      type: "custom:genesisenergy-powershout-card",
+      title: "Genesis Energy",
+      default_tab: "shout",
+      chart_days: 17,
+      hidden_services: [],
+    };
   }
 
   setConfig(config) {
@@ -1563,13 +1610,25 @@ class GenesisPowerShoutCard extends HTMLElement {
     }
   }
 
-  getCardSize() {
-    return 7;
-  }
-
   set hass(hass) {
     this._hass = hass;
     if (!this._built) this._build();
+
+    // Invalidate live memory cache whenever coordinator finishes an update
+    if (hass && hass.states) {
+      const entities = this._resolveEntities();
+      const acctSt = hass.states[entities.entity_account_details];
+      const lastUpdate = acctSt?.state || acctSt?.last_updated;
+      if (this._lastCoordinatorUpdate && lastUpdate && this._lastCoordinatorUpdate !== lastUpdate) {
+        this._usageCache = {};
+        const now = new Date();
+        const currentMonthKey = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}`;
+        this._monthDailyCache.elec?.delete(currentMonthKey);
+        this._monthDailyCache.gas?.delete(currentMonthKey);
+        this._monthDailyCache.ev?.delete(currentMonthKey);
+      }
+      this._lastCoordinatorUpdate = lastUpdate;
+    }
 
     this._applyThemeMode();
     this._update();
@@ -1793,11 +1852,9 @@ class GenesisPowerShoutCard extends HTMLElement {
         btn.classList.add("sel");
         this._activeService = btn.dataset.service;
 
-        // If EV is selected, enforce daily granularity and align date bounds
         if (this._activeService === "ev") {
           this._activeGranularity = "daily";
-          const now = new Date();
-          const minEv = new Date(now.getFullYear(), now.getMonth() - 1, 1);
+          const minEv = new Date(EV_START_YEAR, EV_START_MONTH, 1);
           if (this._navDate < minEv) {
             this._navDate = minEv;
           }
@@ -1808,7 +1865,7 @@ class GenesisPowerShoutCard extends HTMLElement {
       });
     });
 
-    // Surgical Targeted Sync Button in Sub-Menu Row
+    // Targeted Sync Button
     const syncBtn = this._el("subtab-sync-btn");
     if (syncBtn) {
       syncBtn.addEventListener("click", () => {
@@ -1866,11 +1923,11 @@ class GenesisPowerShoutCard extends HTMLElement {
       setTimeout(() => {
         btn.textContent = origText;
         this._closePopover();
-        this._renderUnifiedUsageGraph();
+        this._renderUnifiedUsageGraph(true);
       }, 600);
     });
 
-    // SVG Hitbox Interaction & Click-to-Drilldown
+    // SVG Hitbox Interaction
     const svg = this._el("usage-chart-svg");
     const chartWrap = this._el("chart-wrap");
 
@@ -1985,7 +2042,7 @@ class GenesisPowerShoutCard extends HTMLElement {
     const currentYear = now.getFullYear();
     const currentMonth = now.getMonth();
     const isEv = this._activeService === "ev";
-    const minYear = isEv ? currentYear : currentYear - 3;
+    const minYear = isEv ? EV_START_YEAR : currentYear - 3;
 
     if (this._activeGranularity === "monthly" && !isEv) {
       const nextY = this._navDate.getFullYear() + direction;
@@ -2002,7 +2059,6 @@ class GenesisPowerShoutCard extends HTMLElement {
       if (isEv) {
         isPastLimit = (testY < EV_START_YEAR) || (testY === EV_START_YEAR && testM < EV_START_MONTH);
       }
-      
       const isFutureLimit = (testY > currentYear) || (testY === currentYear && testM > currentMonth);
 
       if (!isPastLimit && !isFutureLimit) {
@@ -2158,7 +2214,6 @@ class GenesisPowerShoutCard extends HTMLElement {
     }
     this._updateMainMeterSyncBadge(this._entities);
 
-    // Lazy load the usage canvas ONLY when navigating to the Usage tab
     if (tab === TAB_USAGE) {
       this._renderUnifiedUsageGraph();
     }
@@ -2298,8 +2353,18 @@ class GenesisPowerShoutCard extends HTMLElement {
     const entities = this._resolveEntities();
     this._entities = entities;
 
-    if (this._config.name || this._config.title) {
-      const customTitle = this._config.name || this._config.title;
+    const customTitle = (this._config.title || this._config.name || "").trim();
+    const headerTitleEl = this._el("card-header-title");
+    if (headerTitleEl) {
+      if (customTitle) {
+        headerTitleEl.textContent = customTitle;
+        headerTitleEl.removeAttribute("hidden");
+      } else {
+        headerTitleEl.setAttribute("hidden", "");
+      }
+    }
+
+    if (customTitle) {
       this._el("account-title-label").textContent = customTitle;
     }
 
@@ -2320,9 +2385,9 @@ class GenesisPowerShoutCard extends HTMLElement {
     }
 
     let hasPowerShout = hasBalanceSensor && isEligible;
-    if (this._config.show_powershout === true) {
+    if (this._config.show_powershout === true || this._config.show_powershout === "true") {
       hasPowerShout = true;
-    } else if (this._config.show_powershout === false) {
+    } else if (this._config.show_powershout === false || this._config.show_powershout === "false") {
       hasPowerShout = false;
     } else if (!hasPowerShout && hasBalanceSensor) {
       hasPowerShout = true;
@@ -2342,7 +2407,7 @@ class GenesisPowerShoutCard extends HTMLElement {
     );
     this._hasElectricity = true;
 
-    // Service Filtering via Config (hidden_services)
+    // Service Filtering via Config
     const hidden = this._getHiddenServices();
     const showRecent = !hidden.has("recent");
     const showElec = this._hasElectricity && !hidden.has("elec") && !hidden.has("electricity");
@@ -2459,7 +2524,6 @@ class GenesisPowerShoutCard extends HTMLElement {
     this._updateForecast();
     this._updateSummary(entities);
 
-    // Lazy load the usage canvas: ONLY render when Usage tab is active
     if (this._tab === TAB_USAGE) {
       this._renderUnifiedUsageGraph();
     }
@@ -2565,30 +2629,25 @@ class GenesisPowerShoutCard extends HTMLElement {
     if (!btn || btn.classList.contains("syncing")) return;
     btn.classList.add("syncing");
 
-    // Clear card memory cache so Sync always pulls a fresh batch
-    this._usageCache = {};
+    this._clearAllCache();
 
     const service = this._activeService;
     const now = new Date();
-    const currentYear = now.getFullYear();
     const pad = (n) => String(n).padStart(2, "0");
-    const currentMonthKey = `${currentYear}-${pad(now.getMonth() + 1)}`;
     const viewedMKey = `${this._navDate.getFullYear()}-${pad(this._navDate.getMonth() + 1)}`;
 
-    this._monthDailyCache[service]?.delete(viewedMKey);
-    try {
-      sessionStorage.removeItem(`genesis_daily_${service}_${viewedMKey}`);
-    } catch {}
-
-    try {
-      const fuelType = service === "gas" ? "gas" : (service === "recent" ? "both" : "electricity");
-      await this._hass.callService("genesisenergy", "force_update", { fuel_type: fuelType });
-    } catch (err) {
-      console.warn("[Genesis Card] Force update error:", err);
+    const isLiveTarget = (service === "recent" || viewedMKey === `${now.getFullYear()}-${pad(now.getMonth() + 1)}`);
+    if (isLiveTarget) {
+      try {
+        const fuelType = service === "gas" ? "gas" : (service === "recent" ? "both" : "electricity");
+        await this._hass.callService("genesisenergy", "force_update", { fuel_type: fuelType });
+      } catch (err) {
+        console.warn("[Genesis Card] Force update error:", err);
+      }
     }
 
     try {
-      await this._renderUnifiedUsageGraph();
+      await this._renderUnifiedUsageGraph(true);
     } finally {
       setTimeout(() => {
         btn.classList.remove("syncing");
@@ -2811,14 +2870,16 @@ class GenesisPowerShoutCard extends HTMLElement {
   _getMonthFromCache(service, monthKey) {
     const now = new Date();
     const currentMonthKey = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}`;
-    const isLiveMonth = (monthKey === currentMonthKey) || monthKey.startsWith(`genesis_monthly_${service}_${now.getFullYear()}`);
+    const isLiveMonth = (monthKey === currentMonthKey);
 
     if (this._monthDailyCache[service]?.has(monthKey)) {
       const entry = this._monthDailyCache[service].get(monthKey);
-      if (!isLiveMonth || (Date.now() - (entry.ts || 0) < LIVE_DATA_CACHE_TTL_MS)) {
+      if (Date.now() - (entry.ts || 0) < LIVE_DATA_CACHE_TTL_MS) {
         return entry.data || entry;
       }
     }
+
+    // Only load closed historical past months from browser sessionStorage
     if (!isLiveMonth) {
       try {
         const raw = sessionStorage.getItem(`genesis_daily_${service}_${monthKey}`);
@@ -2830,7 +2891,7 @@ class GenesisPowerShoutCard extends HTMLElement {
           }
         }
       } catch {}
-    } 
+    }
     return null;
   }
 
@@ -2838,10 +2899,9 @@ class GenesisPowerShoutCard extends HTMLElement {
     if (!items || !items.length) return;
     const now = new Date();
     const currentMonthKey = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}`;
-    const isLiveMonth = (monthKey === currentMonthKey) || monthKey.startsWith(`genesis_monthly_${service}_${now.getFullYear()}`);
+    const isLiveMonth = (monthKey === currentMonthKey);
 
     this._monthDailyCache[service].set(monthKey, { data: items, ts: Date.now() });
-
     if (!isLiveMonth) {
       try {
         sessionStorage.setItem(`genesis_daily_${service}_${monthKey}`, JSON.stringify(items));
@@ -2860,7 +2920,7 @@ class GenesisPowerShoutCard extends HTMLElement {
       const pad = (n) => String(n).padStart(2, "0");
 
       let targetYear = year;
-      let targetMonth = month + (this._lastNavDirection * 3);
+      let targetMonth = month + (this._lastNavDirection);
       const testD = new Date(targetYear, targetMonth, 1);
       targetYear = testD.getFullYear();
       targetMonth = testD.getMonth();
@@ -2875,60 +2935,47 @@ class GenesisPowerShoutCard extends HTMLElement {
       }
 
       try {
-        const fetchStart = new Date(targetYear, targetMonth - 1, 1);
-        if (fetchStart.getFullYear() < minYear) fetchStart.setFullYear(minYear, 0, 1);
-        const fetchEnd = new Date(targetYear, targetMonth + 2, 0);
-
-        const startDateStr = `${fetchStart.getFullYear()}-${pad(fetchStart.getMonth() + 1)}-01`;
-        const endDateStr = `${fetchEnd.getFullYear()}-${pad(fetchEnd.getMonth() + 1)}-${pad(fetchEnd.getDate())}`;
+        const numDays = new Date(targetYear, targetMonth + 1, 0).getDate();
+        const startDateStr = `${targetYear}-${pad(targetMonth + 1)}-01`;
+        const endDateStr = `${targetYear}-${pad(targetMonth + 1)}-${pad(numDays)}`;
 
         const rawBatch = await this._fetchGenesisUsage(service, startDateStr, endDateStr, "DAILY");
-        const byMonth = {};
-        for (const item of rawBatch) {
-          const dtStr = item.startDate || item.date;
-          if (!dtStr) continue;
-          const mKey = dtStr.slice(0, 7);
-          if (!byMonth[mKey]) byMonth[mKey] = [];
-          byMonth[mKey].push(item);
-        }
-        for (const [mKey, monthItems] of Object.entries(byMonth)) {
-          this._saveMonthToCache(service, mKey, monthItems);
+        if (rawBatch && rawBatch.length) {
+          this._saveMonthToCache(service, targetKey, rawBatch);
         }
       } catch {}
-    }, 1000);
+    }, 1200);
   }
 
-  async _fetchGenesisUsage(fuel, startDateStr, endDateStr, intervalType) {
+  async _fetchGenesisUsage(fuel, startDateStr, endDateStr, intervalType, bypassCache = false, forceRefresh = false) {
     const now = new Date();
     const pad = (n) => String(n).padStart(2, "0");
     const todayStr = `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}`;
 
+    const normFuel = fuel === "gas" ? "gas" : (fuel === "ev" ? "ev" : "electricity");
     const isLivePeriod = (intervalType === "MONTHLY" && startDateStr.startsWith(String(now.getFullYear()))) || (endDateStr >= todayStr);
-
-    const cacheKey = `${fuel}_${intervalType}_${startDateStr}_${endDateStr}`;
+    const cacheKey = `${normFuel}_${intervalType}_${startDateStr}_${endDateStr}`;
     const storageKey = `genesis_usage_${cacheKey}`;
 
-    // 4-Hour in-memory cache check
-    if (this._usageCache[cacheKey]) {
-      const entry = this._usageCache[cacheKey];
-      const isFresh = !isLivePeriod || (Date.now() - (entry.ts || 0) < LIVE_DATA_CACHE_TTL_MS);
-      if (isFresh) {
-        return entry.data || entry;
-      }
-    }
-
-    // Disk cache check for completed past periods
-    if (!isLivePeriod) {
-      try {
-        const sessionData = sessionStorage.getItem(storageKey);
-        if (sessionData) {
-          const parsed = JSON.parse(sessionData);
-          if (Array.isArray(parsed) && parsed.length > 0) {
-            this._usageCache[cacheKey] = { data: parsed, ts: Date.now() };
-            return parsed;
-          }
+    if (!bypassCache) {
+      if (this._usageCache[cacheKey]) {
+        const entry = this._usageCache[cacheKey];
+        if (Date.now() - (entry.ts || 0) < LIVE_DATA_CACHE_TTL_MS) {
+          return entry.data || entry;
         }
-      } catch {}
+      }
+      if (!isLivePeriod) {
+        try {
+          const sessionData = sessionStorage.getItem(storageKey);
+          if (sessionData) {
+            const parsed = JSON.parse(sessionData);
+            if (Array.isArray(parsed) && parsed.length > 0) {
+              this._usageCache[cacheKey] = { data: parsed, ts: Date.now() };
+              return parsed;
+            }
+          }
+        } catch {}
+      }
     }
 
     if (!this._hass) return [];
@@ -2936,10 +2983,11 @@ class GenesisPowerShoutCard extends HTMLElement {
     try {
       const resp = await this._hass.callWS({
         type: "genesisenergy/usage",
-        fuel: fuel === "gas" ? "gas" : (fuel === "ev" ? "ev" : "electricity"),
+        fuel: normFuel,
         start_date: startDateStr,
         end_date: endDateStr,
         interval_type: intervalType,
+        force_refresh: Boolean(forceRefresh),
       });
 
       if (resp && Array.isArray(resp.usage)) {
@@ -2952,19 +3000,18 @@ class GenesisPowerShoutCard extends HTMLElement {
         return resp.usage;
       }
     } catch (err) {
-      console.warn("Genesis usage fetch failed:", err);
+      console.warn("[Genesis Card] Usage fetch error:", err);
     }
     return [];
   }
 
-  // ── Unified Graph Rendering Engine (Recent & Historical) ────────────────
-  async _renderUnifiedUsageGraph() {
+  // ── Unified Graph Rendering Engine ──────────────────────────────────────
+  async _renderUnifiedUsageGraph(forceRefresh = false) {
     const isRecent = this._activeService === "recent";
     this._el("recent-controls-wrap").style.display = isRecent ? "block" : "none";
     this._el("historical-controls-wrap").style.display = isRecent ? "none" : "block";
     this._el("recent-timeline-track").style.display = isRecent ? "block" : "none";
 
-    // When EV is active, hide the Monthly toggle because EV only supports Daily
     const isEv = this._activeService === "ev";
     const monthlyBtn = this._el("btn-gran-monthly");
     if (monthlyBtn) {
@@ -2972,14 +3019,13 @@ class GenesisPowerShoutCard extends HTMLElement {
     }
 
     if (isRecent) {
-      await this._renderRecentStackedCanvas();
+      await this._renderRecentStackedCanvas(forceRefresh);
     } else {
-      await this._renderHistoricalCanvas();
+      await this._renderHistoricalCanvas(forceRefresh);
     }
   }
 
-  async _renderRecentStackedCanvas() {
-    this._showChartLoading(false);
+  async _renderRecentStackedCanvas(forceRefresh = false) {
     const entities = this._entities;
     const acctDetailsSt = this._hass.states[entities.entity_account_details];
     const totalUsedSt = this._hass.states[entities.entity_bill_total_used];
@@ -3025,7 +3071,7 @@ class GenesisPowerShoutCard extends HTMLElement {
     }
 
     const startDate = new Date(now.getFullYear(), startMonthNum, startDayNum);
-    const dayOfWeekChars = ["S", "M", "T", "W", "Th", "F", "S"];
+    const dayOfWeekChars = ["S", "M", "T", "W", numColumns > 20 ? "T" : "Th", "F", "S"];
 
     const bookings = balSt?.attributes?.bookings || [];
     const psDateSet = new Set();
@@ -3046,9 +3092,10 @@ class GenesisPowerShoutCard extends HTMLElement {
     const cycleStartStr = `${startDate.getFullYear()}-${pad(startDate.getMonth() + 1)}-${pad(startDate.getDate())}`;
     const todayStr = `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}`;
 
+    // Always fetch fresh local vault reads for live Recent billing cycle
     const [realElecData, realGasData] = await Promise.all([
-      this._fetchGenesisUsage("electricity", cycleStartStr, todayStr, "DAILY"),
-      this._hasGas ? this._fetchGenesisUsage("gas", cycleStartStr, todayStr, "DAILY") : Promise.resolve([]),
+      this._fetchGenesisUsage("electricity", cycleStartStr, todayStr, "DAILY", true, forceRefresh),
+      this._hasGas ? this._fetchGenesisUsage("gas", cycleStartStr, todayStr, "DAILY", true, forceRefresh) : Promise.resolve([]),
     ]);
 
     const elecMap = new Map();
@@ -3080,7 +3127,12 @@ class GenesisPowerShoutCard extends HTMLElement {
     const plotWidth = chartWidth - leftPadding - 10;
     const plotHeight = chartHeight - bottomPadding;
     const colStep = plotWidth / numColumns;
-    const barWidth = 19;
+
+    const barWidth = Math.max(5, Math.min(19, colStep - Math.max(2.5, colStep * 0.22)));
+    const rx = Math.max(1.5, Math.min(3, barWidth * 0.18));
+    const dayCharFontSize = numColumns > 24 ? "8.5" : (numColumns > 18 ? "9.5" : "10.5");
+    const dayNumFontSize = numColumns > 24 ? "9" : (numColumns > 18 ? "10" : "11");
+    const pinScale = Math.min(1, Math.max(0.68, colStep / 24));
 
     let computedMax = 10;
 
@@ -3148,8 +3200,8 @@ class GenesisPowerShoutCard extends HTMLElement {
       const x = d.cx - barWidth / 2;
 
       svgHtml += `
-        <text x="${d.cx}" y="${plotHeight + 15}" text-anchor="middle" class="chart-axis-text" font-size="10.5">${d.dayChar}</text>
-        <text x="${d.cx}" y="${plotHeight + 30}" text-anchor="middle" class="chart-axis-text" font-size="11" font-weight="800" fill="var(--genesis-text)">${d.dayNum}</text>
+        <text x="${d.cx}" y="${plotHeight + 15}" text-anchor="middle" class="chart-axis-text" font-size="${dayCharFontSize}">${d.dayChar}</text>
+        <text x="${d.cx}" y="${plotHeight + 30}" text-anchor="middle" class="chart-axis-text" font-size="${dayNumFontSize}" font-weight="800" fill="var(--genesis-text)">${d.dayNum}</text>
       `;
 
       if (d.hasData) {
@@ -3161,22 +3213,22 @@ class GenesisPowerShoutCard extends HTMLElement {
         const yGasTop = yElecTop - gasHeight;
 
         svgHtml += `
-          <rect x="${x}" y="${yElecTop}" width="${barWidth}" height="${elecHeight}" fill="var(--genesis-orange)" rx="${gasHeight > 0 ? 0 : 3}" />
+          <rect x="${x}" y="${yElecTop}" width="${barWidth}" height="${elecHeight}" fill="var(--genesis-orange)" rx="${gasHeight > 0 ? 0 : rx}" />
         `;
 
         if (gasHeight > 0) {
           svgHtml += `
-            <rect x="${x}" y="${yGasTop}" width="${barWidth}" height="${gasHeight}" fill="var(--genesis-plum)" rx="3" />
+            <rect x="${x}" y="${yGasTop}" width="${barWidth}" height="${gasHeight}" fill="var(--genesis-plum)" rx="${rx}" />
           `;
         }
 
         if (d.hasPS) {
-          const pinY = yGasTop - 18;
+          const pinY = yGasTop - (18 * pinScale);
           svgHtml += `
-            <g transform="translate(${d.cx}, ${pinY})">
+            <g transform="translate(${d.cx}, ${pinY}) scale(${pinScale})">
               <circle cx="0" cy="0" r="9" fill="var(--genesis-orange)" />
               <path d="M 0 9 L 3 13 L -3 13 Z" fill="var(--genesis-orange)" />
-              <text x="0" y="3.5" text-anchor="middle" fill="#ffffff" font-size="10" font-weight="900" font-family="-apple-system, sans-serif">P</text>
+              <text x="0" y="3.5" text-anchor="middle" fill="#ffffff" font-size="9" font-weight="900" font-family="-apple-system, sans-serif">P</text>
             </g>
           `;
         }
@@ -3192,7 +3244,6 @@ class GenesisPowerShoutCard extends HTMLElement {
     const timelinePct = Math.min(100, Math.max(0, (recordedDaysCount / numColumns) * 100));
     this._el("chart-timeline-fill").style.width = `${timelinePct}%`;
 
-    // Render Recent Legend
     const legend = this._el("usage-legend");
     legend.innerHTML = `
       <div class="legend-item">
@@ -3214,7 +3265,7 @@ class GenesisPowerShoutCard extends HTMLElement {
     `;
   }
 
-  async _renderHistoricalCanvas() {
+  async _renderHistoricalCanvas(forceRefresh = false) {
     if (this._loadingDetail) return;
     this._loadingDetail = true;
 
@@ -3241,7 +3292,7 @@ class GenesisPowerShoutCard extends HTMLElement {
       const now = new Date();
       const currentYear = now.getFullYear();
       const currentMonth = now.getMonth();
-      const minYear = isEv ? currentYear : currentYear - 3;
+      const minYear = isEv ? EV_START_YEAR : currentYear - 3;
       const pad = (n) => String(n).padStart(2, "0");
 
       let startDateStr = "";
@@ -3262,13 +3313,12 @@ class GenesisPowerShoutCard extends HTMLElement {
         nextBtn.disabled = year >= currentYear;
 
         const monthlyCacheKey = `genesis_monthly_${service}_${year}`;
-        let cachedYear = this._getMonthFromCache(service, monthlyCacheKey);
+        let cachedYear = !forceRefresh ? this._getMonthFromCache(service, monthlyCacheKey) : null;
         if (cachedYear) {
           apiUsageList = cachedYear;
           this._showChartLoading(false);
         } else {
-          this._showChartLoading(true);
-          apiUsageList = await this._fetchGenesisUsage(service, startDateStr, endDateStr, "MONTHLY");
+          apiUsageList = await this._fetchGenesisUsage(service, startDateStr, endDateStr, "MONTHLY", forceRefresh, forceRefresh);
           this._showChartLoading(false);
           this._saveMonthToCache(service, monthlyCacheKey, apiUsageList);
         }
@@ -3286,51 +3336,24 @@ class GenesisPowerShoutCard extends HTMLElement {
         nextBtn.disabled = year >= currentYear && month >= currentMonth;
 
         const targetMonthKey = `${year}-${pad(month + 1)}`;
-        let cachedMonthData = this._getMonthFromCache(service, targetMonthKey);
+        let cachedMonthData = !forceRefresh ? this._getMonthFromCache(service, targetMonthKey) : null;
 
-        if (cachedMonthData) {
+        if (cachedMonthData && cachedMonthData.length > 0) {
           apiUsageList = cachedMonthData;
           this._showChartLoading(false);
         } else {
-          this._showChartLoading(true);
+          startDateStr = `${year}-${pad(month + 1)}-01`;
+          endDateStr = `${year}-${pad(month + 1)}-${pad(numDays)}`;
 
-          const isCurrentMonth = (year === currentYear && month === currentMonth);
-          let fetchStart, fetchEnd;
-          if (isCurrentMonth) {
-            fetchStart = new Date(year, month - (isEv ? 1 : DAILY_FETCH_PREV_MONTHS), 1);
-            fetchEnd = new Date(year, month + 1, 0);
-          } else {
-            fetchStart = new Date(year, month - 1, 1);
-            const aheadMonth = month + (isEv ? 1 : 2);
-            fetchEnd = new Date(year, aheadMonth + 1, 0);
-            const currentMonthEnd = new Date(currentYear, currentMonth + 1, 0);
-            if (fetchEnd > currentMonthEnd) fetchEnd = currentMonthEnd;
-          }
-
-          if (fetchStart.getFullYear() < minYear) {
-            fetchStart.setFullYear(minYear, isEv ? (currentMonth - 1) : 0, 1);
-          }
-
-          startDateStr = `${fetchStart.getFullYear()}-${pad(fetchStart.getMonth() + 1)}-01`;
-          endDateStr = `${fetchEnd.getFullYear()}-${pad(fetchEnd.getMonth() + 1)}-${pad(fetchEnd.getDate())}`;
-
-          const rawBatch = await this._fetchGenesisUsage(service, startDateStr, endDateStr, "DAILY");
+          const rawBatch = await this._fetchGenesisUsage(service, startDateStr, endDateStr, "DAILY", forceRefresh, forceRefresh);
           this._showChartLoading(false);
 
-          const byMonth = {};
-          for (const item of rawBatch) {
-            const dtStr = item.startDate || item.date;
-            if (!dtStr) continue;
-            const mKey = dtStr.slice(0, 7);
-            if (!byMonth[mKey]) byMonth[mKey] = [];
-            byMonth[mKey].push(item);
+          if (rawBatch && rawBatch.length) {
+            this._saveMonthToCache(service, targetMonthKey, rawBatch);
+            apiUsageList = rawBatch;
+          } else {
+            apiUsageList = [];
           }
-
-          for (const [mKey, monthItems] of Object.entries(byMonth)) {
-            this._saveMonthToCache(service, mKey, monthItems);
-          }
-
-          apiUsageList = byMonth[targetMonthKey] || rawBatch;
         }
 
         if (!isEv) {
@@ -3573,14 +3596,12 @@ class GenesisPowerShoutCard extends HTMLElement {
             svgHtml += `
               <rect x="${x}" y="${yNightTop}" width="${barWidth}" height="${nightHeight}" fill="var(--genesis-teal)" rx="${dayHeight > 0 ? 0 : 2.5}" />
             `;
-
             if (dayHeight > 0) {
               svgHtml += `
                 <rect x="${x}" y="${yDayTop}" width="${barWidth}" height="${dayHeight}" fill="var(--genesis-orange)" rx="2.5" />
               `;
             }
           } else {
-
             svgHtml += `
               <rect x="${x}" y="${yTop}" width="${barWidth}" height="${barHeight}" fill="${barColor}" rx="2.5" />
             `;
@@ -3606,7 +3627,6 @@ class GenesisPowerShoutCard extends HTMLElement {
       svg.innerHTML = svgHtml;
       this._currentDetailData = detailData;
 
-      // Render Historical Legend
       const legend = this._el("usage-legend");
       if (service === "ev") {
         legend.innerHTML = `
@@ -3800,6 +3820,383 @@ class GenesisPowerShoutCard extends HTMLElement {
   }
 }
 
+// ── Visual Configuration Editor ──────────────────────────────────────────
+
+class GenesisPowerShoutCardEditor extends HTMLElement {
+  constructor() {
+    super();
+    this.attachShadow({ mode: "open" });
+    this._config = {};
+    this._hass = null;
+    this._built = false;
+  }
+
+  setConfig(config) {
+    this._config = { ...config };
+    if (!this._built && this._hass) {
+      this._render();
+    } else if (this._built) {
+      this._updateFormValues();
+    }
+  }
+
+  set hass(hass) {
+    const wasNull = !this._hass;
+    this._hass = hass;
+    if (!this._built && this._config) {
+      this._render();
+    } else if (wasNull && this._built) {
+      this._render();
+    }
+  }
+
+  _detectAccountServices() {
+    if (!this._hass) return { hasPowerShout: true, hasGas: false, hasEv: false };
+    const states = this._hass.states || {};
+    const findId = (pattern) => Object.keys(states).find((id) => id.includes(pattern));
+
+    const balId = findId("powershout_balance") || findId("power_shout_balance");
+    const balSt = balId ? states[balId] : null;
+    const hasPowerShout = Boolean(balSt && balSt.state !== "unavailable" && balSt.state !== "unknown");
+
+    const acctDetailsId = findId("account_details");
+    const acctSt = acctDetailsId ? states[acctDetailsId] : null;
+    const attrs = acctSt?.attributes || {};
+    const sidekick = parseData(attrs.widget_sidekick) || parseData(attrs.widget_bill_summary_v2)?.billEstimated;
+    const supplies = sidekick?.supplyTypesArea?.supplyTypes || [];
+    const hasGas = supplies.some(s => (s.type || s.text || "").toLowerCase().includes("gas"));
+
+    const evId = findId("ev_plan_day_usage") || findId("ev_day_usage") || findId("ev_");
+    const hasEv = Boolean(states[evId] || JSON.stringify(attrs.billing_plans || "").toLowerCase().includes("ev"));
+
+    return { hasPowerShout, hasGas, hasEv };
+  }
+
+  _fireChanged() {
+    this.dispatchEvent(new CustomEvent("config-changed", {
+      detail: { config: this._config },
+      bubbles: true,
+      composed: true,
+    }));
+  }
+
+  _updateFormValues() {
+    if (!this.shadowRoot || !this._built) return;
+    const activeEl = this.shadowRoot.activeElement;
+
+    const inpTitle = this.shadowRoot.getElementById("inp-title");
+    if (inpTitle && activeEl !== inpTitle) {
+      inpTitle.value = this._config.title || this._config.name || "";
+    }
+
+    const inpDefaultTab = this.shadowRoot.getElementById("inp-default-tab");
+    if (inpDefaultTab && activeEl !== inpDefaultTab) {
+      inpDefaultTab.value = this._config.default_tab || "shout";
+    }
+
+    const inpChartDays = this.shadowRoot.getElementById("inp-chart-days");
+    if (inpChartDays && activeEl !== inpChartDays) {
+      inpChartDays.value = this._config.chart_days || 17;
+    }
+
+    const hiddenList = Array.isArray(this._config.hidden_services)
+      ? this._config.hidden_services
+      : (typeof this._config.hidden_services === "string" ? this._config.hidden_services.split(",").map(s => s.trim()) : []);
+
+    ["recent", "elec", "gas", "ev"].forEach((srv) => {
+      const chk = this.shadowRoot.getElementById(`chk-hide-${srv}`);
+      if (chk && activeEl !== chk) {
+        chk.checked = hiddenList.includes(srv);
+      }
+    });
+
+    const inpShowPs = this.shadowRoot.getElementById("inp-show-powershout");
+    if (inpShowPs && activeEl !== inpShowPs) {
+      inpShowPs.value = this._config.show_powershout === undefined ? "auto" : String(this._config.show_powershout);
+    }
+  }
+
+  _render() {
+    if (!this.shadowRoot) return;
+    this._built = true;
+
+    const { hasPowerShout, hasGas, hasEv } = this._detectAccountServices();
+
+    const titleVal = this._config.title || this._config.name || "";
+    const defaultTabVal = this._config.default_tab || (hasPowerShout ? "shout" : "usage");
+    const chartDaysVal = this._config.chart_days || 17;
+
+    const hiddenList = Array.isArray(this._config.hidden_services)
+      ? this._config.hidden_services
+      : (typeof this._config.hidden_services === "string" ? this._config.hidden_services.split(",").map(s => s.trim()) : []);
+
+    const liveColor = this._config.live_banner_color || "#f15b29";
+    const offerColor = this._config.offer_banner_color || "#e8a13c";
+    const expColor = this._config.expiring_banner_color || "#e8a13c";
+
+    const editorCss = `
+      *, *::before, *::after { box-sizing: border-box; }
+      :host {
+        display: block;
+        color: var(--primary-text-color, #ffffff);
+        font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+        font-size: 13.5px;
+      }
+      .form-group {
+        margin-bottom: 14px;
+      }
+      .form-label {
+        display: block;
+        font-weight: 700;
+        font-size: 12px;
+        color: var(--secondary-text-color, #9e948a);
+        text-transform: uppercase;
+        letter-spacing: .05em;
+        margin-bottom: 6px;
+      }
+      .form-control {
+        width: 100%;
+        height: 40px;
+        background: var(--secondary-background-color, rgba(127, 127, 127, 0.12));
+        border: 1px solid var(--divider-color, rgba(127, 127, 127, 0.22));
+        border-radius: 10px;
+        color: var(--primary-text-color, #ffffff);
+        padding: 0 12px;
+        font: inherit;
+        outline: none;
+      }
+      .form-control:focus {
+        border-color: #f15b29;
+      }
+      .section-divider {
+        border-top: 1px solid var(--divider-color, rgba(127, 127, 127, 0.22));
+        margin: 18px 0 14px;
+      }
+      .checkbox-grid {
+        display: grid;
+        grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
+        gap: 8px;
+        margin-top: 6px;
+      }
+      .check-label {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        cursor: pointer;
+        font-weight: 600;
+      }
+      .check-label input {
+        accent-color: #f15b29;
+        height: 16px;
+        width: 16px;
+      }
+      .color-row {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        margin-bottom: 8px;
+      }
+      .color-row input[type="color"] {
+        -webkit-appearance: none;
+        border: 1px solid var(--divider-color, rgba(127, 127, 127, 0.22));
+        border-radius: 8px;
+        width: 38px;
+        height: 34px;
+        cursor: pointer;
+        background: none;
+        padding: 0;
+      }
+      .color-row input[type="color"]::-webkit-color-swatch-wrapper { padding: 0; }
+      .color-row input[type="color"]::-webkit-color-swatch { border: none; border-radius: 7px; }
+      .color-label {
+        flex: 1;
+        font-weight: 600;
+        font-size: 13px;
+      }
+      .btn-reset {
+        appearance: none;
+        background: var(--secondary-background-color, rgba(127, 127, 127, 0.12));
+        border: 1px solid var(--divider-color, rgba(127, 127, 127, 0.22));
+        border-radius: 6px;
+        color: var(--secondary-text-color, #9e948a);
+        cursor: pointer;
+        font-size: 11px;
+        font-weight: 700;
+        padding: 4px 8px;
+      }
+      .btn-reset:hover {
+        color: #f15b29;
+        border-color: #f15b29;
+      }
+    `;
+
+    this.shadowRoot.innerHTML = `
+      <style>${editorCss}</style>
+
+      <div class="form-group">
+        <label class="form-label">Card Header Title</label>
+        <input type="text" class="form-control" id="inp-title" placeholder="Home / Genesis Energy" value="${escapeHtml(titleVal)}">
+      </div>
+
+      <div class="form-group">
+        <label class="form-label">Default Landing Tab</label>
+        <select class="form-control" id="inp-default-tab">
+          ${hasPowerShout ? `<option value="shout"${defaultTabVal === 'shout' ? ' selected' : ''}>Shout</option>` : ''}
+          <option value="usage"${defaultTabVal === 'usage' ? ' selected' : ''}>Usage</option>
+          ${hasPowerShout ? `<option value="past"${defaultTabVal === 'past' ? ' selected' : ''}>Past Hours</option>` : ''}
+          <option value="forecast"${defaultTabVal === 'forecast' ? ' selected' : ''}>Forecast</option>
+          <option value="summary"${defaultTabVal === 'summary' ? ' selected' : ''}>Summary</option>
+        </select>
+      </div>
+
+      <div class="form-group">
+        <label class="form-label">Recent Chart Columns (Days: 7–31)</label>
+        <input type="number" class="form-control" id="inp-chart-days" min="7" max="31" value="${chartDaysVal}">
+      </div>
+
+      <div class="section-divider"></div>
+
+      <div class="form-group">
+        <label class="form-label">Hide Services (Check to hide from card)</label>
+        <div class="checkbox-grid">
+          <label class="check-label">
+            <input type="checkbox" id="chk-hide-recent"${hiddenList.includes("recent") ? " checked" : ""}>
+            <span>Hide Recent</span>
+          </label>
+          <label class="check-label">
+            <input type="checkbox" id="chk-hide-elec"${hiddenList.includes("elec") ? " checked" : ""}>
+            <span>Hide Electricity</span>
+          </label>
+          ${hasGas ? `
+            <label class="check-label">
+              <input type="checkbox" id="chk-hide-gas"${hiddenList.includes("gas") ? " checked" : ""}>
+              <span>Hide Natural Gas</span>
+            </label>
+          ` : ''}
+          ${hasEv ? `
+            <label class="check-label">
+              <input type="checkbox" id="chk-hide-ev"${hiddenList.includes("ev") ? " checked" : ""}>
+              <span>Hide EV Plan</span>
+            </label>
+          ` : ''}
+        </div>
+      </div>
+
+      ${hasPowerShout ? `
+        <div class="section-divider"></div>
+
+        <div class="form-group">
+          <label class="form-label">Power Shout Visibility</label>
+          <select class="form-control" id="inp-show-powershout">
+            <option value="auto"${this._config.show_powershout === undefined ? ' selected' : ''}>Auto (Detect account balance)</option>
+            <option value="true"${this._config.show_powershout === true || this._config.show_powershout === 'true' ? ' selected' : ''}>Always Show</option>
+            <option value="false"${this._config.show_powershout === false || this._config.show_powershout === 'false' ? ' selected' : ''}>Always Hide</option>
+          </select>
+        </div>
+
+        <div class="form-group">
+          <label class="form-label">Power Shout Banner Colors</label>
+          
+          <div class="color-row">
+            <input type="color" id="col-live" value="${liveColor}">
+            <span class="color-label">Live Free Power Banner</span>
+            <button class="btn-reset" id="reset-col-live">↺ Default</button>
+          </div>
+
+          <div class="color-row">
+            <input type="color" id="col-offer" value="${offerColor}">
+            <span class="color-label">Gift Offer Banner</span>
+            <button class="btn-reset" id="reset-col-offer">↺ Default</button>
+          </div>
+
+          <div class="color-row">
+            <input type="color" id="col-exp" value="${expColor}">
+            <span class="color-label">Expiring Hours Alert</span>
+            <button class="btn-reset" id="reset-col-exp">↺ Default</button>
+          </div>
+        </div>
+      ` : ''}
+    `;
+
+    this.shadowRoot.getElementById("inp-title").oninput = (e) => {
+      this._config.title = e.target.value;
+      this._fireChanged();
+    };
+
+    this.shadowRoot.getElementById("inp-default-tab").onchange = (e) => {
+      this._config.default_tab = e.target.value;
+      this._fireChanged();
+    };
+
+    this.shadowRoot.getElementById("inp-chart-days").onchange = (e) => {
+      const val = parseInt(e.target.value, 10);
+      this._config.chart_days = isNaN(val) ? 17 : Math.min(31, Math.max(7, val));
+      this._fireChanged();
+    };
+
+    const updateHiddenServices = () => {
+      const hidden = [];
+      if (this.shadowRoot.getElementById("chk-hide-recent")?.checked) hidden.push("recent");
+      if (this.shadowRoot.getElementById("chk-hide-elec")?.checked) hidden.push("elec");
+      if (hasGas && this.shadowRoot.getElementById("chk-hide-gas")?.checked) hidden.push("gas");
+      if (hasEv && this.shadowRoot.getElementById("chk-hide-ev")?.checked) hidden.push("ev");
+      this._config.hidden_services = hidden;
+      this._fireChanged();
+    };
+
+    ["chk-hide-recent", "chk-hide-elec", "chk-hide-gas", "chk-hide-ev"].forEach((id) => {
+      const el = this.shadowRoot.getElementById(id);
+      if (el) el.onchange = updateHiddenServices;
+    });
+
+    if (hasPowerShout) {
+      this.shadowRoot.getElementById("inp-show-powershout").onchange = (e) => {
+        const val = e.target.value;
+        if (val === "auto") {
+          delete this._config.show_powershout;
+        } else {
+          this._config.show_powershout = val === "true";
+        }
+        this._fireChanged();
+      };
+
+      const liveColEl = this.shadowRoot.getElementById("col-live");
+      liveColEl.oninput = (e) => {
+        this._config.live_banner_color = e.target.value;
+        this._fireChanged();
+      };
+      this.shadowRoot.getElementById("reset-col-live").onclick = () => {
+        delete this._config.live_banner_color;
+        liveColEl.value = "#f15b29";
+        this._fireChanged();
+      };
+
+      const offerColEl = this.shadowRoot.getElementById("col-offer");
+      offerColEl.oninput = (e) => {
+        this._config.offer_banner_color = e.target.value;
+        this._fireChanged();
+      };
+      this.shadowRoot.getElementById("reset-col-offer").onclick = () => {
+        delete this._config.offer_banner_color;
+        offerColEl.value = "#e8a13c";
+        this._fireChanged();
+      };
+
+      const expColEl = this.shadowRoot.getElementById("col-exp");
+      expColEl.oninput = (e) => {
+        this._config.expiring_banner_color = e.target.value;
+        this._fireChanged();
+      };
+      this.shadowRoot.getElementById("reset-col-exp").onclick = () => {
+        delete this._config.expiring_banner_color;
+        expColEl.value = "#e8a13c";
+        this._fireChanged();
+      };
+    }
+  }
+}
+
+customElements.define("genesisenergy-powershout-card-editor", GenesisPowerShoutCardEditor);
 customElements.define("genesisenergy-powershout-card", GenesisPowerShoutCard);
 
 window.customCards = window.customCards || [];
@@ -3807,5 +4204,5 @@ window.customCards.push({
   type: "genesisenergy-powershout-card",
   name: "Genesis Energy — Power Shout & Account Card",
   description: "Interactive Power Shout, retroactive redemption, recent usage stacked chart, and billing cycle forecast.",
-  preview: false,
+  preview: true,
 });

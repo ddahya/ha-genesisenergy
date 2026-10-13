@@ -95,12 +95,13 @@ async def _async_register_lovelace_card(hass: HomeAssistant) -> None:
     vol.Required("start_date"): cv.string,
     vol.Required("end_date"): cv.string,
     vol.Required("interval_type"): vol.In(["MONTHLY", "DAILY", "HOURLY"]),
+    vol.Optional("force_refresh", default=False): cv.boolean,
 })
 @websocket_api.async_response
 async def ws_get_usage(hass: HomeAssistant, connection: websocket_api.ActiveConnection, msg: dict) -> None:
-    """Fetch on-demand usage directly from Genesis API with vault persistence & caching."""
+    """Fetch usage prioritizing local vault (.storage) and coordinator cache."""
     domain_data = hass.data.get(DOMAIN, {})
-    coordinator = None
+    coordinator: GenesisEnergyDataUpdateCoordinator | None = None
     for item in domain_data.values():
         if isinstance(item, GenesisEnergyDataUpdateCoordinator) and hasattr(item, "api"):
             coordinator = item
@@ -114,27 +115,12 @@ async def ws_get_usage(hass: HomeAssistant, connection: websocket_api.ActiveConn
     start_date = msg["start_date"]
     end_date = msg["end_date"]
     interval = msg["interval_type"]
+    force_refresh = msg.get("force_refresh", False)
 
     today = dt_util.now().date()
     today_str = today.strftime("%Y-%m-%d")
 
-    # A query is live/ongoing if its end date reaches today/future, or if monthly for the current year
-    is_ongoing = (interval == "MONTHLY" and start_date.startswith(str(today.year))) or (end_date >= today_str)
-
-    # 1. Check in-memory coordinator cache for completed past historical queries
-    cache_key = f"{fuel}_{interval}_{start_date}_{end_date}"
-    if not is_ongoing and cache_key in coordinator.usage_cache:
-        connection.send_result(msg["id"], {"usage": coordinator.usage_cache[cache_key]})
-        return
-
-    # 2. Check persistent local vault for past daily data before making cloud calls
-    if interval == "DAILY" and not is_ongoing and hasattr(coordinator, "get_vault_days"):
-        vault_days = coordinator.get_vault_days(fuel, start_date, end_date)
-        if vault_days and len(vault_days) >= 25:
-            connection.send_result(msg["id"], {"usage": vault_days})
-            return
-
-    # 3. Date boundary adjustments
+    # 1. Date boundary adjustments
     if interval == "MONTHLY":
         year = start_date[:4]
         start_date = f"{year}-01-01"
@@ -146,6 +132,61 @@ async def ws_get_usage(hass: HomeAssistant, connection: websocket_api.ActiveConn
         if end_date > today_str:
             end_date = today_str
 
+    # 2. LOCAL-FIRST RESOLUTION (when not explicitly forcing a refresh)
+    if not force_refresh:
+        # Check coordinator memory cache for MONTHLY queries
+        if interval == "MONTHLY":
+            cache_key = f"{fuel}_{interval}_{start_date}_{end_date}"
+            if cache_key in coordinator.usage_cache:
+                connection.send_result(msg["id"], {"usage": coordinator.usage_cache[cache_key]})
+                return
+            current_key = f"{fuel}_{interval}_current"
+            if start_date.startswith(str(today.year)) and current_key in coordinator.usage_cache:
+                connection.send_result(msg["id"], {"usage": coordinator.usage_cache[current_key]})
+                return
+
+        # Check .storage vault for DAILY queries
+        elif interval == "DAILY" and hasattr(coordinator, "get_vault_days"):
+            if hasattr(coordinator, "_async_load_vault"):
+                await coordinator._async_load_vault()
+
+            vault_days = coordinator.get_vault_days(fuel, start_date, end_date)
+            if vault_days:
+                if fuel == "ev":
+                    # EV plan vault is the accumulated master store
+                    connection.send_result(msg["id"], {"usage": vault_days})
+                    return
+
+                try:
+                    start_d = datetime.strptime(start_date[:10], "%Y-%m-%d").date()
+                    end_d = min(datetime.strptime(end_date[:10], "%Y-%m-%d").date(), today)
+                    expected_days = (end_d - start_d).days + 1
+                except Exception:
+                    expected_days = len(vault_days)
+
+                latest_entry_d = None
+                try:
+                    latest_raw = vault_days[-1].get("startDate") or vault_days[-1].get("date")
+                    if latest_raw:
+                        latest_entry_d = datetime.strptime(str(latest_raw)[:10], "%Y-%m-%d").date()
+                except Exception:
+                    pass
+
+                is_current_period = (end_date >= today_str)
+                is_vault_complete = False
+
+                if is_current_period:
+                    # Current month: complete if latest meter read is within 2 days of today
+                    is_vault_complete = bool(latest_entry_d and (today - latest_entry_d).days <= 2)
+                else:
+                    # Completed past month: complete if days match expected range
+                    is_vault_complete = len(vault_days) >= max(1, expected_days - 2)
+
+                if is_vault_complete:
+                    connection.send_result(msg["id"], {"usage": vault_days})
+                    return
+
+    # 3. ON-DEMAND REMOTE FETCH (Data missing in vault or force_refresh requested)
     try:
         if fuel == "electricity":
             data = await coordinator.api.get_energy_data_for_period(start_date, end_date, interval_type=interval)
@@ -161,21 +202,29 @@ async def ws_get_usage(hass: HomeAssistant, connection: websocket_api.ActiveConn
         else:
             usage_list = []
 
-        # Archive newly retrieved daily readings into permanent local vault
+        # Archive newly retrieved daily readings into permanent local .storage vault
         if interval == "DAILY" and usage_list and hasattr(coordinator, "async_save_usage_to_vault"):
             await coordinator.async_save_usage_to_vault(fuel, usage_list)
-            # For EV, retrieve the full accumulated vault so purged historical days are included
             if fuel == "ev" and hasattr(coordinator, "get_vault_days"):
                 accumulated = coordinator.get_vault_days("ev", start_date, end_date)
                 if accumulated:
                     usage_list = accumulated
 
-        # Store in coordinator memory cache only for completed historical queries
-        if not is_ongoing:
-            coordinator.usage_cache[cache_key] = usage_list
+        # Cache in-memory for instant navigation
+        cache_key = f"{fuel}_{interval}_{start_date}_{end_date}"
+        coordinator.usage_cache[cache_key] = usage_list
+        if interval == "MONTHLY" and start_date.startswith(str(today.year)):
+            coordinator.usage_cache[f"{fuel}_{interval}_current"] = usage_list
 
         connection.send_result(msg["id"], {"usage": usage_list})
+
     except Exception as err:
+        # Offline or API failure: fall back to whatever is saved in the local vault
+        if interval == "DAILY" and hasattr(coordinator, "get_vault_days"):
+            vault_days = coordinator.get_vault_days(fuel, start_date, end_date)
+            if vault_days:
+                connection.send_result(msg["id"], {"usage": vault_days})
+                return
         LOGGER.error("Error fetching Genesis usage via websocket: %s", err)
         connection.send_error(msg["id"], "api_error", str(err))
 
