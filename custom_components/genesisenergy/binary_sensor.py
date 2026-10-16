@@ -1,6 +1,4 @@
-# custom_components/genesisenergy/binary_sensor.py
-
-from datetime import datetime, timedelta, timezone
+from datetime import timedelta, timezone
 from typing import Any
 
 from homeassistant.components.binary_sensor import BinarySensorEntity
@@ -17,12 +15,13 @@ from .const import (
     DATA_API_POWERSHOUT_OFFERS,
     DATA_API_POWERSHOUT_BALANCE,
     DATA_API_POWERSHOUT_BOOKINGS,
+    CONF_POWERSHOUT_POLL_MINUTES,
+    DEFAULT_POWERSHOUT_POLL_MINUTES,
 )
 from .coordinator import GenesisEnergyDataUpdateCoordinator
 
 
 def _all_bookings(coordinator: GenesisEnergyDataUpdateCoordinator) -> list[dict[str, Any]]:
-    """Return all raw bookings from the coordinator data."""
     bookings_data = coordinator.data.get(DATA_API_POWERSHOUT_BOOKINGS) or {}
     bookings = bookings_data.get("bookings", []) if isinstance(bookings_data, dict) else []
     return [b for b in bookings if isinstance(b, dict)]
@@ -31,7 +30,6 @@ def _all_bookings(coordinator: GenesisEnergyDataUpdateCoordinator) -> list[dict[
 async def async_setup_entry(
     hass: HomeAssistant, config_entry: ConfigEntry, async_add_entities: AddEntitiesCallback
 ) -> None:
-    """Set up the binary sensor entities."""
     coordinator: GenesisEnergyDataUpdateCoordinator = hass.data[DOMAIN][config_entry.entry_id]
 
     entities: list[BinarySensorEntity] = []
@@ -40,8 +38,10 @@ async def async_setup_entry(
         entities.append(PowerShoutOffersAvailableBinarySensor(coordinator))
 
     if coordinator.data.get(DATA_API_POWERSHOUT_BOOKINGS) is not None:
-        entities.append(PowerShoutBookingInProgressBinarySensor(coordinator))
-        entities.append(PowerShoutBookingUpcomingBinarySensor(coordinator))
+        upcoming_sensor = PowerShoutBookingUpcomingBinarySensor(coordinator)
+        in_progress_sensor = PowerShoutBookingInProgressBinarySensor(coordinator, upcoming_sensor)
+        entities.append(in_progress_sensor)
+        entities.append(upcoming_sensor)
 
     async_add_entities(entities)
 
@@ -49,8 +49,6 @@ async def async_setup_entry(
 class PowerShoutOffersAvailableBinarySensor(
     CoordinatorEntity[GenesisEnergyDataUpdateCoordinator], BinarySensorEntity
 ):
-    """Binary sensor that indicates if any Power Shout offers are available."""
-
     _attr_has_entity_name = True
 
     def __init__(self, coordinator: GenesisEnergyDataUpdateCoordinator) -> None:
@@ -62,7 +60,6 @@ class PowerShoutOffersAvailableBinarySensor(
 
     @property
     def is_on(self) -> bool:
-        """Return True if there are active offers."""
         data_offers = self.coordinator.data.get(DATA_API_POWERSHOUT_OFFERS) or {}
         active_offers = data_offers.get("activeOffers", []) if isinstance(data_offers, dict) else []
         if len(active_offers) > 0:
@@ -72,7 +69,6 @@ class PowerShoutOffersAvailableBinarySensor(
 
     @property
     def extra_state_attributes(self) -> dict[str, Any] | None:
-        """Expose the raw offers data."""
         data = self.coordinator.data.get(DATA_API_POWERSHOUT_OFFERS)
         return data if isinstance(data, dict) else None
 
@@ -80,13 +76,15 @@ class PowerShoutOffersAvailableBinarySensor(
 class PowerShoutBookingInProgressBinarySensor(
     CoordinatorEntity[GenesisEnergyDataUpdateCoordinator], BinarySensorEntity
 ):
-    """Binary sensor that is ON while a Power Shout session is actively running."""
-
     _attr_has_entity_name = True
-    _POLL_INTERVAL = timedelta(minutes=2)
 
-    def __init__(self, coordinator: GenesisEnergyDataUpdateCoordinator) -> None:
+    def __init__(
+        self,
+        coordinator: GenesisEnergyDataUpdateCoordinator,
+        upcoming_sensor: "PowerShoutBookingUpcomingBinarySensor | None" = None,
+    ) -> None:
         super().__init__(coordinator)
+        self._upcoming_sensor = upcoming_sensor
         self._attr_device_info = coordinator.device_info
         self._attr_name = "Power Shout Booking In Progress"
         self._attr_unique_id = f"{coordinator.config_entry.entry_id}_powershout_booking_in_progress"
@@ -94,35 +92,73 @@ class PowerShoutBookingInProgressBinarySensor(
         self._bookings: list[dict[str, Any]] = _all_bookings(coordinator)
 
     async def async_added_to_hass(self) -> None:
-        """Schedule listeners to accurately track live boundaries."""
         await super().async_added_to_hass()
 
         self.async_on_remove(
-            async_track_time_interval(
-                self.hass, self._async_refresh_bookings, self._POLL_INTERVAL
+            async_track_time_change(
+                self.hass, self._handle_hour_boundary, minute=0, second=0
             )
         )
 
-        self.async_on_remove(
-            async_track_time_change(
-                self.hass, self._async_refresh_bookings, minute=0, second=0
-            )
+        poll_minutes = self.coordinator.config_entry.options.get(
+            CONF_POWERSHOUT_POLL_MINUTES, DEFAULT_POWERSHOUT_POLL_MINUTES
         )
+        if poll_minutes and int(poll_minutes) > 0:
+            self.async_on_remove(
+                async_track_time_interval(
+                    self.hass,
+                    self._async_refresh_bookings,
+                    timedelta(minutes=int(poll_minutes)),
+                )
+            )
+
+    @callback
+    def _handle_hour_boundary(self, _now=None) -> None:
+        self.async_write_ha_state()
+        if self._upcoming_sensor and self._upcoming_sensor.hass:
+            self._upcoming_sensor.async_write_ha_state()
 
     @callback
     def _handle_coordinator_update(self) -> None:
         self._bookings = _all_bookings(self.coordinator)
         super()._handle_coordinator_update()
 
-    async def _async_refresh_bookings(self, now=None) -> None:
-        """Fetch latest bookings and write state."""
+    def _has_available_balance(self) -> bool:
+        bal_data = (self.coordinator.data or {}).get(DATA_API_POWERSHOUT_BALANCE)
+        if not isinstance(bal_data, dict):
+            return True
+        try:
+            return float(bal_data.get("balance") or 0) > 0
+        except (ValueError, TypeError):
+            return True
+
+    async def _async_refresh_bookings(self, _now=None) -> None:
+        if not self._bookings and not self._has_available_balance():
+            return
+
+        bookings_changed = False
         try:
             data = await self.coordinator.api.get_powershout_bookings()
             if isinstance(data, dict):
-                self._bookings = [b for b in data.get("bookings", []) if isinstance(b, dict)]
+                new_bookings = [b for b in data.get("bookings", []) if isinstance(b, dict)]
+                if new_bookings != self._bookings:
+                    bookings_changed = True
+                self._bookings = new_bookings
+                if self.coordinator.data is not None:
+                    self.coordinator.data[DATA_API_POWERSHOUT_BOOKINGS] = data
+
+            if bookings_changed and self.coordinator.data is not None:
+                bal_data = await self.coordinator.api.get_powershout_balance()
+                if isinstance(bal_data, dict):
+                    self.coordinator.data[DATA_API_POWERSHOUT_BALANCE] = bal_data
         except Exception as err:
             LOGGER.debug("Could not refresh bookings for in-progress sensor: %s", err)
-        self.async_write_ha_state()
+
+        if bookings_changed:
+            for listener, _ in list(self.coordinator._listeners.values()):
+                listener()
+        else:
+            self.async_write_ha_state()
 
     @property
     def _active_booking(self) -> dict[str, Any] | None:
@@ -158,8 +194,6 @@ class PowerShoutBookingInProgressBinarySensor(
 class PowerShoutBookingUpcomingBinarySensor(
     CoordinatorEntity[GenesisEnergyDataUpdateCoordinator], BinarySensorEntity
 ):
-    """Binary sensor that is ON when future Power Shout bookings exist."""
-
     _attr_has_entity_name = True
 
     def __init__(self, coordinator: GenesisEnergyDataUpdateCoordinator) -> None:

@@ -16,6 +16,13 @@
                     "email": "Email Address",
                     "password": "Password"
                 }
+            },
+            "mfa": {
+                "title": "Two-Factor Verification",
+                "description": "Enter the 6-digit verification code sent to {email}.",
+                "data": {
+                    "verification_code": "Verification Code"
+                }
             }
         }
     },
@@ -23,12 +30,12 @@
         "step": {
             "init": {
                 "title": "Data Synchronisation Settings",
-                "description": "Genesis Energy Electricity and GAS data is often delayed by 24-48 hours.\n\n**Daily Auto-Correction**\nWhen enabled, this integration will perform a special synchronisation every day after **1:00 PM**. It will re-download and **overwrite** the statistics for the last few days to fill in gaps and correct temporary estimates provided by Genesis.\n\nEnable this if you see missing data or inconsistencies in your Energy Dashboard.",
+                "description": "Genesis Energy Electricity and Gas data is often delayed by 24–48 hours.\n\n**Daily Auto-Correction**\nWhen enabled, this integration will perform a special synchronisation every day after **1:00 PM**. It will re-download and **overwrite** the statistics for the last few days to fill in gaps and correct temporary estimates provided by Genesis.\n\n**Power Shout App Synchronisation**\nSets how often (in minutes) Home Assistant checks for Power Shout bookings made externally in the Genesis mobile app or website. Set to **0** to disable background checks if you only book via Home Assistant.",
                 "data": {
-                    "enable_auto_correction": "Enable Daily Auto-Correction"
+                    "enable_auto_correction": "Enable Daily Auto-Correction",
+                    "powershout_poll_minutes": "Power Shout App Sync Interval (minutes)"
                 }
             }
         }
     }
-
 }

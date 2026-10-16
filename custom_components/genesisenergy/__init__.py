@@ -1,6 +1,5 @@
 # custom_components/genesisenergy/__init__.py
 
-from functools import partial
 from pathlib import Path
 import asyncio
 import voluptuous as vol
@@ -58,14 +57,23 @@ SERVICE_SCHEMA_FORCE_UPDATE = vol.Schema({
     vol.Required(ATTR_FUEL_TYPE): vol.In(["electricity", "gas", "both"]),
 })
 
+
+def _get_card_mtime(card_path: Path) -> int | None:
+    """Read card file existence and mtime in executor thread."""
+    if not card_path.is_file():
+        return None
+    return int(card_path.stat().st_mtime)
+
+
 async def _async_register_lovelace_card(hass: HomeAssistant) -> None:
     """Register the Power Shout card as a Lovelace resource in storage mode."""
     www_path = Path(__file__).parent / "www"
     card_path = www_path / _CARD_FILENAME
-    if not card_path.is_file():
+
+    mtime = await hass.async_add_executor_job(_get_card_mtime, card_path)
+    if mtime is None:
         return
 
-    mtime = int(card_path.stat().st_mtime)
     url = f"/{DOMAIN}/{_CARD_FILENAME}?v={mtime}"
 
     lovelace_data = hass.data.get(lovelace_component.DOMAIN)
@@ -88,6 +96,7 @@ async def _async_register_lovelace_card(hass: HomeAssistant) -> None:
         LOGGER.info("Auto-registered Lovelace resource: %s", url)
     except Exception as exc:
         LOGGER.debug("Could not auto-register Lovelace resource: %s", exc)
+
 
 @websocket_api.websocket_command({
     vol.Required("type"): "genesisenergy/usage",
@@ -228,6 +237,7 @@ async def ws_get_usage(hass: HomeAssistant, connection: websocket_api.ActiveConn
         LOGGER.error("Error fetching Genesis usage via websocket: %s", err)
         connection.send_error(msg["id"], "api_error", str(err))
 
+
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """Set up Genesis Energy from a config entry."""
     LOGGER.info("Setting up Genesis Energy for entry: %s...", entry.title)
@@ -258,7 +268,8 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     global _WWW_PATH_REGISTERED
     if not _WWW_PATH_REGISTERED:
         www_path = Path(__file__).parent / "www"
-        if www_path.is_dir():
+        is_dir = await hass.async_add_executor_job(www_path.is_dir)
+        if is_dir:
             await hass.http.async_register_static_paths(
                 [StaticPathConfig(f"/{DOMAIN}", str(www_path), cache_headers=False)]
             )
@@ -508,6 +519,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     LOGGER.info("Genesis Energy setup complete for %s ✅", entry.data[CONF_EMAIL])
     return True
 
+
 async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     unload_ok = await hass.config_entries.async_unload_platforms(entry, PLATFORMS)
     if unload_ok:
@@ -515,6 +527,7 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             await hass.data[DOMAIN][entry.entry_id].api.close()
             hass.data[DOMAIN].pop(entry.entry_id)
     return unload_ok
+
 
 async def async_update_options(hass: HomeAssistant, entry: ConfigEntry) -> None:
     coordinator = hass.data.get(DOMAIN, {}).get(entry.entry_id)

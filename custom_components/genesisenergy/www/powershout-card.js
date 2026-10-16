@@ -1,7 +1,7 @@
 // custom_components/genesisenergy/www/powershout-card.js
-// Genesis Energy — Power Shout & Account Custom Lovelace Card (v2.0.1)
+// Genesis Energy — Power Shout & Account Custom Lovelace Card (v2.0.2)
 
-const CARD_VERSION = "2.0.1";
+const CARD_VERSION = "2.0.2";
 const DOMAIN = "genesisenergy";
 
 // Fixed floor for EV plan (September 2026)
@@ -17,8 +17,16 @@ const TAB_PAST = "past";
 const TAB_FORECAST = "forecast";
 const TAB_SUMMARY = "summary";
 
+const MONTHS_FULL = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"];
+const MONTHS_SHORT = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+const MONTHS_LOWER = ["jan", "feb", "mar", "apr", "may", "jun", "jul", "aug", "sep", "oct", "nov", "dec"];
+
 const LOGO_SVG_URL = new URL("./powershout.svg", import.meta.url).href;
 const LOGO_PNG_URL = new URL("./powershout.png", import.meta.url).href;
+
+const pad2 = (n) => String(n).padStart(2, "0");
+const toIsoDate = (d) => `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())}`;
+const toMonthKey = (d) => `${d.getFullYear()}-${pad2(d.getMonth() + 1)}`;
 
 function parseData(val) {
   if (!val) return null;
@@ -103,7 +111,7 @@ function escapeHtml(value) {
 
 function build24HourOptions() {
   return Array.from({ length: 24 }, (_, hour) => {
-    const val = String(hour).padStart(2, "0");
+    const val = pad2(hour);
     const d = new Date(2000, 0, 1, hour);
     const label = d
       .toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })
@@ -125,6 +133,17 @@ function endHourLabel(startDatetime, duration) {
   if (isNaN(parsed)) return "";
   const end = new Date(parsed.getTime() + Math.max(1, Number(duration) || 1) * 3600000);
   return end.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" }).toLowerCase();
+}
+
+function isPowerShoutItem(item) {
+  return (
+    item.type === "powerShout" ||
+    String(item.type).toLowerCase() === "powershout" ||
+    (item.powerShoutCredits != null && parseFloat(item.powerShoutCredits) > 0) ||
+    (item.powerShoutConsumptions != null && parseFloat(item.powerShoutConsumptions) > 0) ||
+    item.powerShoutPending === true ||
+    item.isPowerShout === true
+  );
 }
 
 const PS_PIN_SVG = `
@@ -1517,6 +1536,11 @@ class GenesisPowerShoutCard extends HTMLElement {
     this._config = {};
     this._hass = null;
     this._built = false;
+    this._els = {};
+    this._entities = null;
+    this._lastStateSig = null;
+    this._lastThemeSig = null;
+
     this._selectedDuration = 2;
     this._unit = "money";
     this._tab = TAB_SHOUT;
@@ -1546,9 +1570,14 @@ class GenesisPowerShoutCard extends HTMLElement {
     this._usageCache = {};
     this._monthDailyCache = { elec: new Map(), gas: new Map(), ev: new Map() };
     this._popoverOpen = false;
-    this._loadingDetail = false;
+    this._renderSeq = 0;
+    this._hoveredCol = null;
     this._prefetchTimer = null;
     this._lastCoordinatorUpdate = null;
+  }
+
+  disconnectedCallback() {
+    clearTimeout(this._prefetchTimer);
   }
 
   getCardSize() {
@@ -1574,7 +1603,7 @@ class GenesisPowerShoutCard extends HTMLElement {
     return document.createElement("genesisenergy-powershout-card-editor");
   }
 
-  static getStubConfig(hass) {
+  static getStubConfig() {
     return {
       type: "custom:genesisenergy-powershout-card",
       title: "Genesis Energy",
@@ -1586,6 +1615,8 @@ class GenesisPowerShoutCard extends HTMLElement {
 
   setConfig(config) {
     this._config = config || {};
+    this._entities = null;
+    this._lastStateSig = null;
     if (this._config.default_tab) {
       this._tab = this._config.default_tab;
     }
@@ -1593,44 +1624,71 @@ class GenesisPowerShoutCard extends HTMLElement {
       this._clearAllCache();
     }
     this._applyCustomBannerColors();
+    if (this._built && this._hass) {
+      this._update();
+    }
   }
 
   _applyCustomBannerColors() {
     const liveColor = this._config.live_banner_color || this._config.live_color;
     if (liveColor) {
       this.style.setProperty("--live-banner-bg", liveColor);
+    } else {
+      this.style.removeProperty("--live-banner-bg");
     }
+
     const offerColor = this._config.offer_banner_color || this._config.offer_color;
     if (offerColor) {
       this.style.setProperty("--offer-banner-border", offerColor);
+    } else {
+      this.style.removeProperty("--offer-banner-border");
     }
+
     const expColor = this._config.expiring_banner_color || this._config.expiring_color;
     if (expColor) {
       this.style.setProperty("--expiring-banner-border", expColor);
+    } else {
+      this.style.removeProperty("--expiring-banner-border");
     }
   }
 
   set hass(hass) {
     this._hass = hass;
     if (!this._built) this._build();
+    if (!hass?.states) return;
 
-    // Invalidate live memory cache whenever coordinator finishes an update
-    if (hass && hass.states) {
-      const entities = this._resolveEntities();
-      const acctSt = hass.states[entities.entity_account_details];
-      const lastUpdate = acctSt?.state || acctSt?.last_updated;
-      if (this._lastCoordinatorUpdate && lastUpdate && this._lastCoordinatorUpdate !== lastUpdate) {
-        this._usageCache = {};
-        const now = new Date();
-        const currentMonthKey = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}`;
-        this._monthDailyCache.elec?.delete(currentMonthKey);
-        this._monthDailyCache.gas?.delete(currentMonthKey);
-        this._monthDailyCache.ev?.delete(currentMonthKey);
-      }
-      this._lastCoordinatorUpdate = lastUpdate;
+    if (!this._entities) {
+      this._entities = this._resolveEntities();
     }
 
-    this._applyThemeMode();
+    const themeSig = `${hass.themes?.theme}|${hass.themes?.darkMode}`;
+    if (this._lastThemeSig !== themeSig) {
+      this._lastThemeSig = themeSig;
+      this._applyThemeMode();
+    }
+
+    const sig = Object.values(this._entities)
+      .map((id) => {
+        const st = hass.states[id];
+        return st ? `${st.state}|${st.last_updated}` : "";
+      })
+      .join(";");
+
+    if (this._lastStateSig === sig) return;
+    this._lastStateSig = sig;
+
+    // Invalidate live memory cache whenever coordinator finishes an update
+    const acctSt = hass.states[this._entities.entity_account_details];
+    const lastUpdate = acctSt?.state || acctSt?.last_updated;
+    if (this._lastCoordinatorUpdate && lastUpdate && this._lastCoordinatorUpdate !== lastUpdate) {
+      this._usageCache = {};
+      const currentMonthKey = toMonthKey(new Date());
+      this._monthDailyCache.elec?.delete(currentMonthKey);
+      this._monthDailyCache.gas?.delete(currentMonthKey);
+      this._monthDailyCache.ev?.delete(currentMonthKey);
+    }
+    this._lastCoordinatorUpdate = lastUpdate;
+
     this._update();
   }
 
@@ -1686,20 +1744,26 @@ class GenesisPowerShoutCard extends HTMLElement {
   }
 
   _resolveEntities() {
-    const states = this._hass.states;
-    const findId = (pattern) => Object.keys(states).find((id) => id.includes(pattern));
+    const keys = Object.keys(this._hass.states);
+    const findId = (...patterns) => {
+      for (const p of patterns) {
+        const match = keys.find((id) => id.includes(p));
+        if (match) return match;
+      }
+      return null;
+    };
 
     return {
-      entity_balance: findId("powershout_balance") || findId("power_shout_balance") || "sensor.genesis_energy_power_shout_balance",
-      entity_offers_available: findId("powershout_offers_available") || findId("power_shout_offers_available") || "binary_sensor.genesis_energy_power_shout_offers_available",
-      entity_eligible: findId("powershout_eligible") || findId("power_shout_eligible") || "sensor.genesis_energy_power_shout_eligible",
+      entity_balance: findId("powershout_balance", "power_shout_balance") || "sensor.genesis_energy_power_shout_balance",
+      entity_offers_available: findId("powershout_offers_available", "power_shout_offers_available") || "binary_sensor.genesis_energy_power_shout_offers_available",
+      entity_eligible: findId("powershout_eligible", "power_shout_eligible") || "sensor.genesis_energy_power_shout_eligible",
       entity_forecast_cost: findId("forecast_cost") || "sensor.genesis_energy_today_s_forecast_cost",
       entity_forecast_usage: findId("forecast_usage") || "sensor.genesis_energy_today_s_forecast_usage",
       entity_estimated_bill: findId("bill_estimated_total") || "sensor.genesis_energy_genesis_bill_estimated_total",
       entity_bill_total_used: findId("bill_total_used") || "sensor.genesis_energy_genesis_bill_total_used",
       entity_account_details: findId("account_details") || "sensor.genesis_energy_account_details",
       entity_lpg: findId("lpg_details") || "sensor.genesis_energy_lpg_details",
-      entity_ev_usage: findId("ev_plan_day_usage") || findId("ev_day_usage") || findId("ev_") || "sensor.genesis_energy_ev_plan_day_usage",
+      entity_ev_usage: findId("ev_plan_day_usage", "ev_day_usage", "ev_") || "sensor.genesis_energy_ev_plan_day_usage",
       entity_bill_balance: findId("bill_balance") || "sensor.genesis_energy_bill_balance",
       entity_bill_due_date: findId("bill_due_date") || "sensor.genesis_energy_bill_due_date",
       entity_booking_in_progress: findId("powershout_booking_in_progress") || "binary_sensor.genesis_energy_power_shout_booking_in_progress",
@@ -1726,6 +1790,7 @@ class GenesisPowerShoutCard extends HTMLElement {
 
   _build() {
     this.shadowRoot.innerHTML = buildTemplate(LOGO_SVG_URL);
+    this._els = {};
     this._built = true;
     this._initDateLimits();
     this._wireListeners();
@@ -1733,7 +1798,7 @@ class GenesisPowerShoutCard extends HTMLElement {
   }
 
   _el(id) {
-    return this.shadowRoot.getElementById(id);
+    return (this._els[id] ??= this.shadowRoot.getElementById(id));
   }
 
   _initDateLimits() {
@@ -1743,16 +1808,13 @@ class GenesisPowerShoutCard extends HTMLElement {
     const future60 = new Date();
     future60.setDate(today.getDate() + 60);
 
-    const pad = (n) => String(n).padStart(2, "0");
-    const todayStr = `${today.getFullYear()}-${pad(today.getMonth() + 1)}-${pad(today.getDate())}`;
-
     const dateInput = this._el("book-date");
-    dateInput.min = `${past31.getFullYear()}-${pad(past31.getMonth() + 1)}-${pad(past31.getDate())}`;
-    dateInput.max = `${future60.getFullYear()}-${pad(future60.getMonth() + 1)}-${pad(future60.getDate())}`;
-    dateInput.value = todayStr;
+    dateInput.min = toIsoDate(past31);
+    dateInput.max = toIsoDate(future60);
+    dateInput.value = toIsoDate(today);
 
     const nextHour = (today.getHours() + 1) % 24;
-    this._el("book-hour").value = String(nextHour).padStart(2, "0");
+    this._el("book-hour").value = pad2(nextHour);
   }
 
   _wireListeners() {
@@ -1933,12 +1995,17 @@ class GenesisPowerShoutCard extends HTMLElement {
 
     svg.addEventListener("pointermove", (e) => {
       const target = e.target.closest(".chart-col-hit");
-      if (target) {
-        const idx = parseInt(target.dataset.col, 10);
+      if (!target) return;
+      const idx = parseInt(target.dataset.col, 10);
+      if (this._hoveredCol !== idx) {
+        this._hoveredCol = idx;
         this._showTooltip(idx);
       }
     });
-    chartWrap.addEventListener("pointerleave", () => this._hideTooltip());
+    chartWrap.addEventListener("pointerleave", () => {
+      this._hoveredCol = null;
+      this._hideTooltip();
+    });
 
     svg.addEventListener("click", (e) => {
       if (this._activeService === "recent") return;
@@ -1956,6 +2023,7 @@ class GenesisPowerShoutCard extends HTMLElement {
           b.classList.toggle("sel", b.dataset.gran === "daily");
         });
 
+        this._hoveredCol = null;
         this._hideTooltip();
         this._renderUnifiedUsageGraph();
       }
@@ -1997,7 +2065,6 @@ class GenesisPowerShoutCard extends HTMLElement {
     yearSelect.innerHTML = yearOptions;
 
     const renderMonthsForYear = (chosenYear) => {
-      const monthsShort = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
       let mHtml = "";
       for (let m = 0; m < 12; m++) {
         const isFuture = (chosenYear === currentYear && m > currentMonth);
@@ -2005,8 +2072,8 @@ class GenesisPowerShoutCard extends HTMLElement {
         const disabled = isFuture || isTooOldForEv;
         const isSel = (chosenYear === this._navDate.getFullYear() && m === this._navDate.getMonth());
         mHtml += `
-          <button class="date-popover-month-btn${isSel ? ' sel' : ''}" data-m="${m}" ${disabled ? 'disabled' : ''}>
-            ${monthsShort[m]}
+          <button class="date-popover-month-btn${isSel ? " sel" : ""}" data-m="${m}" ${disabled ? "disabled" : ""}>
+            ${MONTHS_SHORT[m]}
           </button>
         `;
       }
@@ -2070,17 +2137,16 @@ class GenesisPowerShoutCard extends HTMLElement {
 
   _showTooltip(idx) {
     const tooltip = this._el("chart-tooltip");
-    const chartWrap = this._el("chart-wrap");
+    const d = this._activeService === "recent" ? this._currentDaysData[idx] : this._currentDetailData[idx];
+
+    if (!d || !d.hasData) {
+      this._hideTooltip();
+      return;
+    }
 
     if (this._activeService === "recent") {
-      const d = this._currentDaysData[idx];
-      if (!d || !d.hasData) {
-        this._hideTooltip();
-        return;
-      }
-
-      let psBadgeHtml = d.hasPS ? `<div class="tip-ps-badge">${PS_PIN_SVG} Power Shout Applied</div>` : "";
-      let gasRowHtml = (this._hasGas || d.gas > 0) ? `
+      const psBadgeHtml = d.hasPS ? `<div class="tip-ps-badge">${PS_PIN_SVG} Power Shout Applied</div>` : "";
+      const gasRowHtml = (this._hasGas || d.gas > 0) ? `
         <div class="tip-row"><span>Gas:</span><span>$${fmtNum(d.gas, 2)}</span></div>
       ` : "";
 
@@ -2092,22 +2158,8 @@ class GenesisPowerShoutCard extends HTMLElement {
         <div class="tip-row total"><span>Total:</span><span>$${fmtNum(d.total, 2)}</span></div>
         ${psBadgeHtml}
       `;
-
-      const cxPct = d.cx / 460;
-      const wrapRect = chartWrap.getBoundingClientRect();
-      const isRightHalf = (cxPct * wrapRect.width) > (wrapRect.width / 2);
-      tooltip.style.left = isRightHalf ? "8px" : "auto";
-      tooltip.style.right = isRightHalf ? "auto" : "8px";
-      tooltip.style.top = "6px";
-      tooltip.classList.add("visible");
     } else if (this._activeService === "ev") {
-      const d = this._currentDetailData[idx];
-      if (!d || !d.hasData) {
-        this._hideTooltip();
-        return;
-      }
-
-      let savingsHtml = d.savings > 0 ? `
+      const savingsHtml = d.savings > 0 ? `
         <div class="tip-divider"></div>
         <div class="tip-row" style="color:#00838f;font-weight:800;">
           <span>💰 Off-Peak Savings:</span>
@@ -2135,21 +2187,7 @@ class GenesisPowerShoutCard extends HTMLElement {
         </div>
         ${savingsHtml}
       `;
-
-      const cxPct = d.cx / 460;
-      const wrapRect = chartWrap.getBoundingClientRect();
-      const isRightHalf = (cxPct * wrapRect.width) > (wrapRect.width / 2);
-      tooltip.style.left = isRightHalf ? "8px" : "auto";
-      tooltip.style.right = isRightHalf ? "auto" : "8px";
-      tooltip.style.top = "6px";
-      tooltip.classList.add("visible");
     } else {
-      const d = this._currentDetailData[idx];
-      if (!d || !d.hasData) {
-        this._hideTooltip();
-        return;
-      }
-
       let psBadgeHtml = "";
       if (d.hasPS) {
         let extraInfo = "";
@@ -2158,7 +2196,7 @@ class GenesisPowerShoutCard extends HTMLElement {
         psBadgeHtml = `<div class="tip-ps-badge">${PS_PIN_SVG} Power Shout${extraInfo || " Applied"}</div>`;
       }
 
-      let drillHint = (this._activeGranularity === "monthly" && d.hasData)
+      const drillHint = (this._activeGranularity === "monthly" && d.hasData)
         ? `<div class="tip-drilldown">Click bar to view daily usage ↗</div>`
         : "";
 
@@ -2174,15 +2212,13 @@ class GenesisPowerShoutCard extends HTMLElement {
         ${psBadgeHtml}
         ${drillHint}
       `;
-
-      const cxPct = d.cx / 460;
-      const wrapRect = chartWrap.getBoundingClientRect();
-      const isRightHalf = (cxPct * wrapRect.width) > (wrapRect.width / 2);
-      tooltip.style.left = isRightHalf ? "8px" : "auto";
-      tooltip.style.right = isRightHalf ? "auto" : "8px";
-      tooltip.style.top = "6px";
-      tooltip.classList.add("visible");
     }
+
+    const isRightHalf = (d.cx / 460) > 0.5;
+    tooltip.style.left = isRightHalf ? "8px" : "auto";
+    tooltip.style.right = isRightHalf ? "auto" : "8px";
+    tooltip.style.top = "6px";
+    tooltip.classList.add("visible");
   }
 
   _hideTooltip() {
@@ -2202,7 +2238,7 @@ class GenesisPowerShoutCard extends HTMLElement {
     this._el("book-cta").textContent = `Book ${this._selectedDuration}h (${hourLabel} – ${endLabel}) →`;
   }
 
-  _selectTab(tab) {
+  _selectTab(tab, renderChart = true) {
     if (!tab) return;
     this._tab = tab;
     this.shadowRoot.querySelectorAll('[role="tab"]').forEach((btn) => {
@@ -2214,7 +2250,7 @@ class GenesisPowerShoutCard extends HTMLElement {
     }
     this._updateMainMeterSyncBadge(this._entities);
 
-    if (tab === TAB_USAGE) {
+    if (renderChart && tab === TAB_USAGE) {
       this._renderUnifiedUsageGraph();
     }
   }
@@ -2225,8 +2261,7 @@ class GenesisPowerShoutCard extends HTMLElement {
     if (!dateStr || hourStr === "") return;
 
     const [y, m, d] = dateStr.split("-").map(Number);
-    const pad = (n) => String(n).padStart(2, "0");
-    const startDatetime = `${y}-${pad(m)}-${pad(d)} ${pad(hourStr)}:00:00`;
+    const startDatetime = `${y}-${pad2(m)}-${pad2(d)} ${pad2(hourStr)}:00:00`;
     const endLabel = calculateEndHour(dateStr, hourStr, this._selectedDuration);
     const selHourOption = this._el("book-hour").selectedOptions[0];
     const hourLabel = selHourOption ? selHourOption.textContent : "";
@@ -2348,10 +2383,23 @@ class GenesisPowerShoutCard extends HTMLElement {
     if (svg) svg.style.opacity = isLoading ? "0.38" : "1";
   }
 
+  _extractBookedDateSet(entities) {
+    const balSt = this._hass.states[entities.entity_balance];
+    const bookings = balSt?.attributes?.bookings || [];
+    const psDateSet = new Set();
+    for (const b of bookings) {
+      const dtStr = b.startDateTime || b.startDate || b.start;
+      if (dtStr) {
+        const k = parseApiDateKey(dtStr);
+        if (k) psDateSet.add(k);
+      }
+    }
+    return psDateSet;
+  }
+
   _update() {
     if (!this._built || !this._hass) return;
-    const entities = this._resolveEntities();
-    this._entities = entities;
+    const entities = this._entities || (this._entities = this._resolveEntities());
 
     const customTitle = (this._config.title || this._config.name || "").trim();
     const headerTitleEl = this._el("card-header-title");
@@ -2445,7 +2493,6 @@ class GenesisPowerShoutCard extends HTMLElement {
     const tabForecast = this._el("tab-forecast");
 
     this._updateDuePill(entities, hasPowerShout);
-    this._updateMainMeterSyncBadge(entities);
 
     if (hasPowerShout) {
       psWrap.removeAttribute("hidden");
@@ -2465,7 +2512,7 @@ class GenesisPowerShoutCard extends HTMLElement {
       const expMsg = balSt?.attributes?.expiring_hours_message || balSt?.attributes?.expiring_hours_tooltip;
       
       if (expMsg && expMsg.trim() && this._hasPowerShout) {
-        expText.innerHTML = escapeHtml(expMsg).replace(/(\d+\s*hours?|\d+\s*hrs?)/gi, '<b>$1</b>');
+        expText.innerHTML = escapeHtml(expMsg).replace(/(\d+\s*hours?|\d+\s*hrs?)/gi, "<b>$1</b>");
         expBar.removeAttribute("hidden");
       } else {
         expBar.setAttribute("hidden", "");
@@ -2487,12 +2534,13 @@ class GenesisPowerShoutCard extends HTMLElement {
       this._el("expiring-bar").setAttribute("hidden", "");
 
       if (this._tab === TAB_SHOUT || this._tab === TAB_PAST) {
-        this._selectTab(TAB_USAGE);
+        this._tab = TAB_USAGE;
       }
     }
 
-    this._selectTab(this._tab);
-    this._updateTopBillingBox(entities);
+    // Update tab UI state without double-triggering the chart render
+    this._selectTab(this._tab, false);
+    this._updateTopBillingBox(entities, sidekick);
 
     const offerSt = this._hass.states[entities.entity_offers_available];
     const offerRow = this._el("offer-row");
@@ -2585,11 +2633,7 @@ class GenesisPowerShoutCard extends HTMLElement {
       return;
     }
 
-    let updaterId = entities?.entity_electricity_updater;
-    if (this._activeService === "gas") {
-      updaterId = entities?.entity_gas_updater;
-    }
-
+    const updaterId = this._activeService === "gas" ? entities?.entity_gas_updater : entities?.entity_electricity_updater;
     if (!updaterId) {
       el.style.display = "none";
       return;
@@ -2632,15 +2676,11 @@ class GenesisPowerShoutCard extends HTMLElement {
     this._clearAllCache();
 
     const service = this._activeService;
-    const now = new Date();
-    const pad = (n) => String(n).padStart(2, "0");
-    const viewedMKey = `${this._navDate.getFullYear()}-${pad(this._navDate.getMonth() + 1)}`;
-
-    const isLiveTarget = (service === "recent" || viewedMKey === `${now.getFullYear()}-${pad(now.getMonth() + 1)}`);
+    const isLiveTarget = (service === "recent" || toMonthKey(this._navDate) === toMonthKey(new Date()));
     if (isLiveTarget) {
       try {
         const fuelType = service === "gas" ? "gas" : (service === "recent" ? "both" : "electricity");
-        await this._hass.callService("genesisenergy", "force_update", { fuel_type: fuelType });
+        await this._hass.callService(DOMAIN, "force_update", { fuel_type: fuelType });
       } catch (err) {
         console.warn("[Genesis Card] Force update error:", err);
       }
@@ -2655,13 +2695,15 @@ class GenesisPowerShoutCard extends HTMLElement {
     }
   }
 
-  _updateTopBillingBox(entities) {
-    const acctDetailsSt = this._hass.states[entities.entity_account_details];
+  _updateTopBillingBox(entities, cachedSidekick) {
     const totalUsedSt = this._hass.states[entities.entity_bill_total_used];
     const estTotalSt = this._hass.states[entities.entity_estimated_bill];
 
-    const attrs = acctDetailsSt?.attributes || {};
-    const sidekick = parseData(attrs.widget_sidekick) || parseData(attrs.widget_bill_summary_v2)?.billEstimated;
+    let sidekick = cachedSidekick;
+    if (!sidekick) {
+      const attrs = this._hass.states[entities.entity_account_details]?.attributes || {};
+      sidekick = parseData(attrs.widget_sidekick) || parseData(attrs.widget_bill_summary_v2)?.billEstimated;
+    }
 
     let usedVal = null;
     if (sidekick?.titleArea?.value != null) {
@@ -2868,9 +2910,7 @@ class GenesisPowerShoutCard extends HTMLElement {
   }
 
   _getMonthFromCache(service, monthKey) {
-    const now = new Date();
-    const currentMonthKey = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}`;
-    const isLiveMonth = (monthKey === currentMonthKey);
+    const isLiveMonth = (monthKey === toMonthKey(new Date()));
 
     if (this._monthDailyCache[service]?.has(monthKey)) {
       const entry = this._monthDailyCache[service].get(monthKey);
@@ -2897,9 +2937,7 @@ class GenesisPowerShoutCard extends HTMLElement {
 
   _saveMonthToCache(service, monthKey, items) {
     if (!items || !items.length) return;
-    const now = new Date();
-    const currentMonthKey = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}`;
-    const isLiveMonth = (monthKey === currentMonthKey);
+    const isLiveMonth = (monthKey === toMonthKey(new Date()));
 
     this._monthDailyCache[service].set(monthKey, { data: items, ts: Date.now() });
     if (!isLiveMonth) {
@@ -2917,27 +2955,24 @@ class GenesisPowerShoutCard extends HTMLElement {
       const currentYear = now.getFullYear();
       const currentMonth = now.getMonth();
       const minYear = currentYear - 3;
-      const pad = (n) => String(n).padStart(2, "0");
 
-      let targetYear = year;
-      let targetMonth = month + (this._lastNavDirection);
-      const testD = new Date(targetYear, targetMonth, 1);
-      targetYear = testD.getFullYear();
-      targetMonth = testD.getMonth();
+      const testD = new Date(year, month + this._lastNavDirection, 1);
+      const targetYear = testD.getFullYear();
+      const targetMonth = testD.getMonth();
 
       if (targetYear < minYear || (targetYear > currentYear) || (targetYear === currentYear && targetMonth > currentMonth)) {
         return;
       }
 
-      const targetKey = `${targetYear}-${pad(targetMonth + 1)}`;
+      const targetKey = `${targetYear}-${pad2(targetMonth + 1)}`;
       if (this._getMonthFromCache(service, targetKey)) {
         return;
       }
 
       try {
         const numDays = new Date(targetYear, targetMonth + 1, 0).getDate();
-        const startDateStr = `${targetYear}-${pad(targetMonth + 1)}-01`;
-        const endDateStr = `${targetYear}-${pad(targetMonth + 1)}-${pad(numDays)}`;
+        const startDateStr = `${targetYear}-${pad2(targetMonth + 1)}-01`;
+        const endDateStr = `${targetYear}-${pad2(targetMonth + 1)}-${pad2(numDays)}`;
 
         const rawBatch = await this._fetchGenesisUsage(service, startDateStr, endDateStr, "DAILY");
         if (rawBatch && rawBatch.length) {
@@ -2949,8 +2984,7 @@ class GenesisPowerShoutCard extends HTMLElement {
 
   async _fetchGenesisUsage(fuel, startDateStr, endDateStr, intervalType, bypassCache = false, forceRefresh = false) {
     const now = new Date();
-    const pad = (n) => String(n).padStart(2, "0");
-    const todayStr = `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}`;
+    const todayStr = toIsoDate(now);
 
     const normFuel = fuel === "gas" ? "gas" : (fuel === "ev" ? "ev" : "electricity");
     const isLivePeriod = (intervalType === "MONTHLY" && startDateStr.startsWith(String(now.getFullYear()))) || (endDateStr >= todayStr);
@@ -3026,10 +3060,10 @@ class GenesisPowerShoutCard extends HTMLElement {
   }
 
   async _renderRecentStackedCanvas(forceRefresh = false) {
+    const reqId = ++this._renderSeq;
     const entities = this._entities;
     const acctDetailsSt = this._hass.states[entities.entity_account_details];
     const totalUsedSt = this._hass.states[entities.entity_bill_total_used];
-    const balSt = this._hass.states[entities.entity_balance];
 
     const attrs = acctDetailsSt?.attributes || {};
     const sidekick = parseData(attrs.widget_sidekick) || parseData(attrs.widget_bill_summary_v2)?.billEstimated;
@@ -3042,7 +3076,7 @@ class GenesisPowerShoutCard extends HTMLElement {
     }
     this._el("usage-total-used").textContent = `$${totalUsedNum.toFixed(2)}`;
 
-    let periodStr = sidekick?.barArea?.leftText || "Current Period";
+    const periodStr = sidekick?.barArea?.leftText || "Current Period";
     let periodName = "Billing Period";
     if (periodStr.includes("–") || periodStr.includes("-")) {
       const delim = periodStr.includes("–") ? "–" : "-";
@@ -3055,33 +3089,24 @@ class GenesisPowerShoutCard extends HTMLElement {
 
     const numColumns = parseInt(this._config.chart_days, 10) || 17;
     const now = new Date();
-    const pad = (n) => String(n).padStart(2, "0");
 
     let startDayNum = 27;
     let startMonthNum = now.getMonth() - 1;
     if (startMonthNum < 0) startMonthNum = 11;
 
-    if (periodStr && periodStr.match(/(\d+)\s+([A-Za-z]+)/)) {
-      const m = periodStr.match(/(\d+)\s+([A-Za-z]+)/);
-      startDayNum = parseInt(m[1], 10);
-      const mName = m[2].toLowerCase().slice(0, 3);
-      const months = ["jan","feb","mar","apr","may","jun","jul","aug","sep","oct","nov","dec"];
-      const foundIdx = months.indexOf(mName);
+    const matchPeriod = periodStr ? periodStr.match(/(\d+)\s+([A-Za-z]+)/) : null;
+    if (matchPeriod) {
+      startDayNum = parseInt(matchPeriod[1], 10);
+      const mName = matchPeriod[2].toLowerCase().slice(0, 3);
+      const foundIdx = MONTHS_LOWER.indexOf(mName);
       if (foundIdx !== -1) startMonthNum = foundIdx;
     }
 
-    const startDate = new Date(now.getFullYear(), startMonthNum, startDayNum);
+    const startYear = (now.getMonth() === 0 && startMonthNum === 11) ? now.getFullYear() - 1 : now.getFullYear();
+    const startDate = new Date(startYear, startMonthNum, startDayNum);
     const dayOfWeekChars = ["S", "M", "T", "W", numColumns > 20 ? "T" : "Th", "F", "S"];
 
-    const bookings = balSt?.attributes?.bookings || [];
-    const psDateSet = new Set();
-    for (const b of bookings) {
-      const dtStr = b.startDateTime || b.startDate || b.start;
-      if (dtStr) {
-        const k = parseApiDateKey(dtStr);
-        if (k) psDateSet.add(k);
-      }
-    }
+    const psDateSet = this._extractBookedDateSet(entities);
 
     const diffDays = Math.max(1, Math.floor((now.getTime() - startDate.getTime()) / 86400000) + 1);
     const recordedDaysCount = Math.min(numColumns, diffDays);
@@ -3089,8 +3114,8 @@ class GenesisPowerShoutCard extends HTMLElement {
     const dailyAvg = recordedDaysCount > 0 ? (totalUsedNum / recordedDaysCount) : 0;
     this._el("usage-daily-avg").textContent = `$${dailyAvg.toFixed(2)}`;
 
-    const cycleStartStr = `${startDate.getFullYear()}-${pad(startDate.getMonth() + 1)}-${pad(startDate.getDate())}`;
-    const todayStr = `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}`;
+    const cycleStartStr = toIsoDate(startDate);
+    const todayStr = toIsoDate(now);
 
     // Always fetch fresh local vault reads for live Recent billing cycle
     const [realElecData, realGasData] = await Promise.all([
@@ -3098,18 +3123,13 @@ class GenesisPowerShoutCard extends HTMLElement {
       this._hasGas ? this._fetchGenesisUsage("gas", cycleStartStr, todayStr, "DAILY", true, forceRefresh) : Promise.resolve([]),
     ]);
 
+    if (reqId !== this._renderSeq) return;
+
     const elecMap = new Map();
     for (const item of realElecData) {
       const k = parseApiDateKey(item.startDate || item.date);
       const cost = parseFloat(item.costNZD ?? item.cost ?? item.dollars ?? 0);
-      const isPS = (
-        item.type === "powerShout" ||
-        String(item.type).toLowerCase() === "powershout" ||
-        (item.powerShoutCredits != null && parseFloat(item.powerShoutCredits) > 0) ||
-        (item.powerShoutConsumptions != null && parseFloat(item.powerShoutConsumptions) > 0) ||
-        item.powerShoutPending === true
-      );
-      if (k) elecMap.set(k, { cost, isPS });
+      if (k) elecMap.set(k, { cost, isPS: isPowerShoutItem(item) });
     }
 
     const gasMap = new Map();
@@ -3139,7 +3159,7 @@ class GenesisPowerShoutCard extends HTMLElement {
     for (let i = 0; i < numColumns; i++) {
       const colDate = new Date(startDate.getTime() + i * 86400000);
       const isPastOrToday = colDate <= now;
-      const isoKey = `${colDate.getFullYear()}-${pad(colDate.getMonth() + 1)}-${pad(colDate.getDate())}`;
+      const isoKey = toIsoDate(colDate);
 
       let elecVal = 0;
       let gasVal = 0;
@@ -3162,7 +3182,7 @@ class GenesisPowerShoutCard extends HTMLElement {
       daysData.push({
         date: colDate,
         dayChar: dayOfWeekChars[colDate.getDay()],
-        dayNum: String(colDate.getDate()).padStart(2, "0"),
+        dayNum: pad2(colDate.getDate()),
         elec: elecVal,
         gas: gasVal,
         total: totalVal,
@@ -3255,19 +3275,18 @@ class GenesisPowerShoutCard extends HTMLElement {
           <span class="legend-dot" style="background:var(--genesis-plum)"></span>
           <span>Natural Gas</span>
         </div>
-      ` : ''}
+      ` : ""}
       ${this._hasPowerShout ? `
         <div class="legend-item">
           ${PS_PIN_SVG}
           <span>Power Shout</span>
         </div>
-      ` : ''}
+      ` : ""}
     `;
   }
 
   async _renderHistoricalCanvas(forceRefresh = false) {
-    if (this._loadingDetail) return;
-    this._loadingDetail = true;
+    const reqId = ++this._renderSeq;
 
     try {
       const isDollar = this._detailUnit === "dollar";
@@ -3285,15 +3304,12 @@ class GenesisPowerShoutCard extends HTMLElement {
         serviceLabel = "EV";
       }
 
-      const monthsFull = ["January","February","March","April","May","June","July","August","September","October","November","December"];
-      const monthsShort = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
       const dayOfWeekChars = ["S", "M", "T", "W", "Th", "F", "S"];
 
       const now = new Date();
       const currentYear = now.getFullYear();
       const currentMonth = now.getMonth();
       const minYear = isEv ? EV_START_YEAR : currentYear - 3;
-      const pad = (n) => String(n).padStart(2, "0");
 
       let startDateStr = "";
       let endDateStr = "";
@@ -3313,12 +3329,14 @@ class GenesisPowerShoutCard extends HTMLElement {
         nextBtn.disabled = year >= currentYear;
 
         const monthlyCacheKey = `genesis_monthly_${service}_${year}`;
-        let cachedYear = !forceRefresh ? this._getMonthFromCache(service, monthlyCacheKey) : null;
+        const cachedYear = !forceRefresh ? this._getMonthFromCache(service, monthlyCacheKey) : null;
         if (cachedYear) {
           apiUsageList = cachedYear;
           this._showChartLoading(false);
         } else {
+          if (forceRefresh) this._showChartLoading(true);
           apiUsageList = await this._fetchGenesisUsage(service, startDateStr, endDateStr, "MONTHLY", forceRefresh, forceRefresh);
+          if (reqId !== this._renderSeq) return;
           this._showChartLoading(false);
           this._saveMonthToCache(service, monthlyCacheKey, apiUsageList);
         }
@@ -3326,7 +3344,7 @@ class GenesisPowerShoutCard extends HTMLElement {
         const year = this._navDate.getFullYear();
         const month = this._navDate.getMonth();
         const numDays = new Date(year, month + 1, 0).getDate();
-        navLabel.textContent = `${monthsFull[month]} ${year} ▾`;
+        navLabel.textContent = `${MONTHS_FULL[month]} ${year} ▾`;
 
         if (isEv) {
           prevBtn.disabled = (year < EV_START_YEAR) || (year === EV_START_YEAR && month <= EV_START_MONTH);
@@ -3335,17 +3353,19 @@ class GenesisPowerShoutCard extends HTMLElement {
         }
         nextBtn.disabled = year >= currentYear && month >= currentMonth;
 
-        const targetMonthKey = `${year}-${pad(month + 1)}`;
-        let cachedMonthData = !forceRefresh ? this._getMonthFromCache(service, targetMonthKey) : null;
+        const targetMonthKey = `${year}-${pad2(month + 1)}`;
+        const cachedMonthData = !forceRefresh ? this._getMonthFromCache(service, targetMonthKey) : null;
 
         if (cachedMonthData && cachedMonthData.length > 0) {
           apiUsageList = cachedMonthData;
           this._showChartLoading(false);
         } else {
-          startDateStr = `${year}-${pad(month + 1)}-01`;
-          endDateStr = `${year}-${pad(month + 1)}-${pad(numDays)}`;
+          startDateStr = `${year}-${pad2(month + 1)}-01`;
+          endDateStr = `${year}-${pad2(month + 1)}-${pad2(numDays)}`;
 
+          if (forceRefresh) this._showChartLoading(true);
           const rawBatch = await this._fetchGenesisUsage(service, startDateStr, endDateStr, "DAILY", forceRefresh, forceRefresh);
+          if (reqId !== this._renderSeq) return;
           this._showChartLoading(false);
 
           if (rawBatch && rawBatch.length) {
@@ -3361,16 +3381,7 @@ class GenesisPowerShoutCard extends HTMLElement {
         }
       }
 
-      const balSt = this._hass.states[this._resolveEntities().entity_balance];
-      const bookings = balSt?.attributes?.bookings || [];
-      const psDateSet = new Set();
-      for (const b of bookings) {
-        const dtStr = b.startDateTime || b.startDate || b.start;
-        if (dtStr) {
-          const k = parseApiDateKey(dtStr);
-          if (k) psDateSet.add(k);
-        }
-      }
+      const psDateSet = this._extractBookedDateSet(this._entities);
 
       const apiLookup = new Map();
       for (const item of apiUsageList) {
@@ -3401,15 +3412,7 @@ class GenesisPowerShoutCard extends HTMLElement {
             cost = parseFloat(item.costNZD ?? item.cost ?? item.dollars ?? item.amount ?? 0);
           }
 
-          const isPS = (
-            item.type === "powerShout" ||
-            String(item.type).toLowerCase() === "powershout" ||
-            (item.powerShoutCredits != null && parseFloat(item.powerShoutCredits) > 0) ||
-            (item.powerShoutConsumptions != null && parseFloat(item.powerShoutConsumptions) > 0) ||
-            item.powerShoutPending === true ||
-            item.isPowerShout === true
-          );
-
+          const isPS = isPowerShoutItem(item);
           const psCredits = parseFloat(item.powerShoutCredits || 0);
           const psConsumptions = parseFloat(item.powerShoutConsumptions || 0);
 
@@ -3450,7 +3453,7 @@ class GenesisPowerShoutCard extends HTMLElement {
 
         for (let day = 1; day <= numDaysInMonth; day++) {
           const dObj = new Date(year, month, day);
-          const isoKey = `${year}-${pad(month + 1)}-${pad(day)}`;
+          const isoKey = `${year}-${pad2(month + 1)}-${pad2(day)}`;
           const isFuture = dObj > now;
 
           let kwVal = 0;
@@ -3482,7 +3485,7 @@ class GenesisPowerShoutCard extends HTMLElement {
             label: serviceLabel,
             title: fmtTooltipDate(dObj),
             bottomChar: dayOfWeekChars[dObj.getDay()],
-            bottomNum: String(day).padStart(2, "0"),
+            bottomNum: pad2(day),
             kw: kwVal,
             cost: costVal,
             kwDay, kwNight, costDay, costNight, savings,
@@ -3506,7 +3509,7 @@ class GenesisPowerShoutCard extends HTMLElement {
           let hasData = false;
           let kwDay = 0, kwNight = 0, costDay = 0, costNight = 0, savings = 0;
 
-          const mKey = `${year}-${pad(m + 1)}`;
+          const mKey = `${year}-${pad2(m + 1)}`;
           if (!isFuture && apiLookup.has(mKey)) {
             const row = apiLookup.get(mKey);
             kwVal = row.kw;
@@ -3524,8 +3527,8 @@ class GenesisPowerShoutCard extends HTMLElement {
 
           detailData.push({
             label: serviceLabel,
-            title: `${monthsFull[m]} ${year}`,
-            bottomChar: monthsShort[m],
+            title: `${MONTHS_FULL[m]} ${year}`,
+            bottomChar: MONTHS_SHORT[m],
             bottomNum: "",
             kw: kwVal,
             cost: costVal,
@@ -3578,8 +3581,8 @@ class GenesisPowerShoutCard extends HTMLElement {
         d.yTop = yTop;
 
         svgHtml += `
-          <text x="${cx}" y="${plotHeight + 14}" text-anchor="middle" class="chart-axis-text" font-size="${gran === 'daily' ? '9.5' : '11'}">${d.bottomChar}</text>
-          ${d.bottomNum ? `<text x="${cx}" y="${plotHeight + 27}" text-anchor="middle" class="chart-axis-text" font-size="10" font-weight="800" fill="var(--genesis-text)">${d.bottomNum}</text>` : ''}
+          <text x="${cx}" y="${plotHeight + 14}" text-anchor="middle" class="chart-axis-text" font-size="${gran === "daily" ? "9.5" : "11"}">${d.bottomChar}</text>
+          ${d.bottomNum ? `<text x="${cx}" y="${plotHeight + 27}" text-anchor="middle" class="chart-axis-text" font-size="10" font-weight="800" fill="var(--genesis-text)">${d.bottomNum}</text>` : ""}
         `;
 
         if (d.hasData) {
@@ -3650,15 +3653,16 @@ class GenesisPowerShoutCard extends HTMLElement {
               ${PS_PIN_SVG}
               <span>Power Shout</span>
             </div>
-          ` : ''}
+          ` : ""}
         `;
       }
 
     } catch (err) {
       console.warn("[Genesis Card] Error rendering usage chart:", err);
     } finally {
-      this._loadingDetail = false;
-      this._showChartLoading(false);
+      if (reqId === this._renderSeq) {
+        this._showChartLoading(false);
+      }
     }
   }
 
@@ -3693,7 +3697,7 @@ class GenesisPowerShoutCard extends HTMLElement {
       const subs = billSum.descriptionSubstrings || [];
       subs.forEach((s, idx) => {
         const text = s.text || "";
-        desc = desc.replace(new RegExp(`\\{\\{${idx}\\}\\}`, 'g'), `<b>${escapeHtml(text)}</b>`);
+        desc = desc.replace(new RegExp(`\\{\\{${idx}\\}\\}`, "g"), `<b>${escapeHtml(text)}</b>`);
       });
 
       html += `
@@ -3853,9 +3857,16 @@ class GenesisPowerShoutCardEditor extends HTMLElement {
   _detectAccountServices() {
     if (!this._hass) return { hasPowerShout: true, hasGas: false, hasEv: false };
     const states = this._hass.states || {};
-    const findId = (pattern) => Object.keys(states).find((id) => id.includes(pattern));
+    const keys = Object.keys(states);
+    const findId = (...patterns) => {
+      for (const p of patterns) {
+        const match = keys.find((id) => id.includes(p));
+        if (match) return match;
+      }
+      return null;
+    };
 
-    const balId = findId("powershout_balance") || findId("power_shout_balance");
+    const balId = findId("powershout_balance", "power_shout_balance");
     const balSt = balId ? states[balId] : null;
     const hasPowerShout = Boolean(balSt && balSt.state !== "unavailable" && balSt.state !== "unknown");
 
@@ -3866,7 +3877,7 @@ class GenesisPowerShoutCardEditor extends HTMLElement {
     const supplies = sidekick?.supplyTypesArea?.supplyTypes || [];
     const hasGas = supplies.some(s => (s.type || s.text || "").toLowerCase().includes("gas"));
 
-    const evId = findId("ev_plan_day_usage") || findId("ev_day_usage") || findId("ev_");
+    const evId = findId("ev_plan_day_usage", "ev_day_usage", "ev_");
     const hasEv = Boolean(states[evId] || JSON.stringify(attrs.billing_plans || "").toLowerCase().includes("ev"));
 
     return { hasPowerShout, hasGas, hasEv };
@@ -4041,11 +4052,11 @@ class GenesisPowerShoutCardEditor extends HTMLElement {
       <div class="form-group">
         <label class="form-label">Default Landing Tab</label>
         <select class="form-control" id="inp-default-tab">
-          ${hasPowerShout ? `<option value="shout"${defaultTabVal === 'shout' ? ' selected' : ''}>Shout</option>` : ''}
-          <option value="usage"${defaultTabVal === 'usage' ? ' selected' : ''}>Usage</option>
-          ${hasPowerShout ? `<option value="past"${defaultTabVal === 'past' ? ' selected' : ''}>Past Hours</option>` : ''}
-          <option value="forecast"${defaultTabVal === 'forecast' ? ' selected' : ''}>Forecast</option>
-          <option value="summary"${defaultTabVal === 'summary' ? ' selected' : ''}>Summary</option>
+          ${hasPowerShout ? `<option value="shout"${defaultTabVal === "shout" ? " selected" : ""}>Shout</option>` : ""}
+          <option value="usage"${defaultTabVal === "usage" ? " selected" : ""}>Usage</option>
+          ${hasPowerShout ? `<option value="past"${defaultTabVal === "past" ? " selected" : ""}>Past Hours</option>` : ""}
+          <option value="forecast"${defaultTabVal === "forecast" ? " selected" : ""}>Forecast</option>
+          <option value="summary"${defaultTabVal === "summary" ? " selected" : ""}>Summary</option>
         </select>
       </div>
 
@@ -4072,13 +4083,13 @@ class GenesisPowerShoutCardEditor extends HTMLElement {
               <input type="checkbox" id="chk-hide-gas"${hiddenList.includes("gas") ? " checked" : ""}>
               <span>Hide Natural Gas</span>
             </label>
-          ` : ''}
+          ` : ""}
           ${hasEv ? `
             <label class="check-label">
               <input type="checkbox" id="chk-hide-ev"${hiddenList.includes("ev") ? " checked" : ""}>
               <span>Hide EV Plan</span>
             </label>
-          ` : ''}
+          ` : ""}
         </div>
       </div>
 
@@ -4088,9 +4099,9 @@ class GenesisPowerShoutCardEditor extends HTMLElement {
         <div class="form-group">
           <label class="form-label">Power Shout Visibility</label>
           <select class="form-control" id="inp-show-powershout">
-            <option value="auto"${this._config.show_powershout === undefined ? ' selected' : ''}>Auto (Detect account balance)</option>
-            <option value="true"${this._config.show_powershout === true || this._config.show_powershout === 'true' ? ' selected' : ''}>Always Show</option>
-            <option value="false"${this._config.show_powershout === false || this._config.show_powershout === 'false' ? ' selected' : ''}>Always Hide</option>
+            <option value="auto"${this._config.show_powershout === undefined ? " selected" : ""}>Auto (Detect account balance)</option>
+            <option value="true"${this._config.show_powershout === true || this._config.show_powershout === "true" ? " selected" : ""}>Always Show</option>
+            <option value="false"${this._config.show_powershout === false || this._config.show_powershout === "false" ? " selected" : ""}>Always Hide</option>
           </select>
         </div>
 
@@ -4115,7 +4126,7 @@ class GenesisPowerShoutCardEditor extends HTMLElement {
             <button class="btn-reset" id="reset-col-exp">↺ Default</button>
           </div>
         </div>
-      ` : ''}
+      ` : ""}
     `;
 
     this.shadowRoot.getElementById("inp-title").oninput = (e) => {

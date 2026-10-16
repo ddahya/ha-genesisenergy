@@ -1,5 +1,3 @@
-# custom_components/genesisenergy/const.py
-
 from logging import Logger, getLogger
 from typing import Final
 
@@ -9,23 +7,24 @@ INTEGRATION_NAME: Final = "Genesis Energy"
 
 PLATFORMS: Final = ["sensor", "binary_sensor"]
 
-# --- Configuration ---
 CONF_EMAIL: Final = "email"
 CONF_PASSWORD: Final = "password"
 CONF_REFRESH_TOKEN: Final = "refresh_token"
+CONF_ACCESS_TOKEN: Final = "access_token"
+CONF_TOKEN_EXPIRY: Final = "token_expiry"
 CONF_VERIFICATION_CODE: Final = "verification_code"
 DEFAULT_SCAN_INTERVAL_HOURS: Final = 1
 CONF_ENABLE_AUTO_CORRECTION: Final = "enable_auto_correction"
+CONF_POWERSHOUT_POLL_MINUTES: Final = "powershout_poll_minutes"
+DEFAULT_POWERSHOUT_POLL_MINUTES: Final = 10
 DAILY_OVERWRITE_HOUR: Final = 13
 
-# --- Local Store for Redeemed Past Hours ---
 REDEEMED_STORE_VERSION: Final = 1
 REDEEMED_KEEP_DAYS: Final = 60
 USAGE_VAULT_VERSION: Final = 1
 
-# --- API Data Keys for Coordinator ---
 DATA_API_ELECTRICITY_USAGE: Final = "api_electricity_usage"
-DATA_API_EV_PLAN_USAGE: Final = "api_ev_plan_usage" 
+DATA_API_EV_PLAN_USAGE: Final = "api_ev_plan_usage"
 DATA_API_GAS_USAGE: Final = "api_gas_usage"
 DATA_API_POWERSHOUT_INFO: Final = "api_powershout_info"
 DATA_API_POWERSHOUT_BALANCE: Final = "api_powershout_balance"
@@ -56,13 +55,11 @@ DATA_API_LPG_DELIVERY_HISTORY: Final = "api_lpg_delivery_history"
 DATA_API_LPG_DELIVERY_SUMMARY: Final = "api_lpg_delivery_summary"
 DATA_API_LPG_DETAILS: Final = "api_lpg_details"
 
-# --- Statistic IDs for Energy Dashboard ---
 STATISTIC_ID_ELECTRICITY_CONSUMPTION: Final = f"{DOMAIN}:electricity_consumption_daily"
 STATISTIC_ID_ELECTRICITY_COST: Final = f"{DOMAIN}:electricity_cost_daily"
 STATISTIC_ID_GAS_CONSUMPTION: Final = f"{DOMAIN}:gas_consumption_daily"
 STATISTIC_ID_GAS_COST: Final = f"{DOMAIN}:gas_cost_daily"
 
-# --- Sensor EntityDescription Keys ---
 SENSOR_KEY_POWERSHOUT_ELIGIBLE: Final = "powershout_eligible"
 SENSOR_KEY_POWERSHOUT_BALANCE: Final = "powershout_balance"
 SENSOR_KEY_ACCOUNT_DETAILS: Final = "account_details"
@@ -70,40 +67,33 @@ SENSOR_KEY_GENERATION_MIX: Final = "generation_mix"
 SENSOR_KEY_POWERSHOUT_OFFER_AVAILABLE: Final = "powershout_offer_available"
 SENSOR_KEY_LPG_DETAILS: Final = "lpg_details"
 
-# --- LPG Sensor Keys ---
 SENSOR_KEY_LPG_ORDER_STATUS: Final = "lpg_order_status"
 SENSOR_KEY_LPG_DELIVERY_HISTORY: Final = "lpg_delivery_history"
 SENSOR_KEY_LPG_DELIVERY_SUMMARY: Final = "lpg_delivery_summary"
 
-# --- Keys for Billing Sensors ---
 SENSOR_KEY_BILL_ELEC_USED: Final = "bill_electricity_used"
 SENSOR_KEY_BILL_GAS_USED: Final = "bill_gas_used"
 SENSOR_KEY_BILL_TOTAL_USED: Final = "bill_total_used"
 SENSOR_KEY_BILL_ESTIMATED_TOTAL: Final = "bill_estimated_total"
 SENSOR_KEY_BILL_ESTIMATED_FUTURE: Final = "bill_estimated_future"
 
-# --- Keys for Live Billing Summary Sensors (from billing/summary) ---
 SENSOR_KEY_BILL_BALANCE: Final = "bill_balance"
 SENSOR_KEY_BILL_OVERDUE: Final = "bill_overdue"
 SENSOR_KEY_BILL_DUE_DATE: Final = "bill_due_date"
 SENSOR_KEY_BILL_DUE_DAYS: Final = "bill_due_days"
 
-# --- Keys for EV Plan Sensors ---
 SENSOR_KEY_EV_DAY_USAGE: Final = "ev_day_usage"
 SENSOR_KEY_EV_DAY_COST: Final = "ev_day_cost"
 SENSOR_KEY_EV_NIGHT_USAGE: Final = "ev_night_usage"
 SENSOR_KEY_EV_NIGHT_COST: Final = "ev_night_cost"
 SENSOR_KEY_EV_TOTAL_SAVINGS: Final = "ev_total_savings"
 
-# --- Keys for Forecast Sensors ---
 SENSOR_KEY_FORECAST_USAGE: Final = "forecast_usage"
 SENSOR_KEY_FORECAST_COST: Final = "forecast_cost"
 
-# --- Device Information ---
 DEVICE_MANUFACTURER: Final = "Genesis Energy"
 DEVICE_MODEL: Final = "Online Account"
 
-# --- Service Related Constants ---
 SERVICE_ADD_POWERSHOUT_BOOKING: Final = "add_powershout_booking"
 SERVICE_CANCEL_POWERSHOUT_BOOKING: Final = "cancel_powershout_booking"
 SERVICE_ACCEPT_POWERSHOUT_OFFER: Final = "accept_powershout_offer"
