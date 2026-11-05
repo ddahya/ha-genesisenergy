@@ -1,6 +1,9 @@
 {
   "domain": "genesisenergy",
   "name": "Genesis Energy",
+  "categories": [
+    "energy"
+  ],
   "codeowners": [
     "@ddahya"
   ],
@@ -9,6 +12,7 @@
     "recorder"
   ],
   "documentation": "https://github.com/ddahya/ha-genesisenergy",
+  "integration_type": "service",
   "iot_class": "cloud_polling",
   "issue_tracker": "https://github.com/ddahya/ha-genesisenergy/issues",
   "requirements": [],
