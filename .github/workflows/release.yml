@@ -4,23 +4,34 @@ on:
   release:
     types: [published]
 
+env:
+  COMPONENT_NAME: genesisenergy
+
 jobs:
   release:
-    name: Release
+    name: Prepare release
     runs-on: ubuntu-latest
     permissions:
       contents: write
     steps:
-      - name: Checkout code
+      - name: Download repo
         uses: actions/checkout@v4
 
-      - name: Zip integration directory
+      - name: Adjust version number
         shell: bash
         run: |
-          cd "${{ github.workspace }}/custom_components/genesisenergy"
-          zip genesisenergy.zip -r ./
+          version="${{ github.event.release.tag_name }}"
+          version="${version#v}"
+          yq e -P -o=json \
+            -i ".version = \"${version}\"" \
+            "${{ github.workspace }}/custom_components/${{ env.COMPONENT_NAME }}/manifest.json"
+
+      - name: Zip integration directory
+        run: |
+          cd "${{ github.workspace }}/custom_components/${{ env.COMPONENT_NAME }}"
+          zip ${{ env.COMPONENT_NAME }}.zip -r ./ -x "__pycache__/*"
 
       - name: Upload zip to release
         uses: softprops/action-gh-release@v2
         with:
-          files: ${{ github.workspace }}/custom_components/genesisenergy/genesisenergy.zip
+          files: ${{ github.workspace }}/custom_components/${{ env.COMPONENT_NAME }}/${{ env.COMPONENT_NAME }}.zip
