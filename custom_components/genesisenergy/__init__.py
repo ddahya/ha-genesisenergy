@@ -3,7 +3,6 @@
 from pathlib import Path
 import asyncio
 import voluptuous as vol
-from zoneinfo import ZoneInfo
 from datetime import timedelta, datetime
 
 from homeassistant.config_entries import ConfigEntry
@@ -244,6 +243,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
     hass.data.setdefault(DOMAIN, {})
     coordinator = GenesisEnergyDataUpdateCoordinator(hass, entry)
+    coordinator.nz_tz = await dt_util.async_get_time_zone("Pacific/Auckland")
     hass.data[DOMAIN][entry.entry_id] = coordinator
 
     try:
@@ -343,7 +343,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         successful_bookings = 0
         booked_timestamps = []
         try:
-            selected_date_for_vouchers = base_start_dt.astimezone(ZoneInfo("UTC")).strftime('%Y-%m-%dT00:00:00.000Z')
+            selected_date_for_vouchers = base_start_dt.astimezone(dt_util.UTC).strftime('%Y-%m-%dT00:00:00.000Z')
             voucher_data = await coordinator.api.get_powershout_vouchers_for_date(selected_date_for_vouchers, supply_point_id)
             
             available_vouchers = []

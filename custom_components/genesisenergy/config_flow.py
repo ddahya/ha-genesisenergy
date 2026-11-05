@@ -98,6 +98,16 @@ class GenesisEnergyConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                         CONF_ACCESS_TOKEN: self._api.access_token,
                         CONF_TOKEN_EXPIRY: self._api.token_expiry,
                     }
+                    if self.context.get("source") == config_entries.SOURCE_REAUTH:
+                        entry = self.hass.config_entries.async_get_entry(self.context["entry_id"])
+                        if entry:
+                            self.hass.config_entries.async_update_entry(
+                                entry,
+                                data={**entry.data, **entry_data},
+                            )
+                            await self.hass.config_entries.async_reload(entry.entry_id)
+                        await self._api.close()
+                        return self.async_abort(reason="reauth_successful")
                     await self._api.close()
                     return self.async_create_entry(title=INTEGRATION_NAME, data=entry_data)
                 errors["base"] = "invalid_auth"
@@ -116,6 +126,62 @@ class GenesisEnergyConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                 vol.Required(CONF_VERIFICATION_CODE): cv.string,
             }),
             description_placeholders={"email": self._email or "your email"},
+            errors=errors,
+        )
+
+    async def async_step_reauth(self, entry_data):
+        """Handle initiation of re-authentication flow."""
+        self._email = entry_data.get(CONF_EMAIL)
+        return await self.async_step_reauth_confirm()
+
+    async def async_step_reauth_confirm(self, user_input=None):
+        """Confirm re-authentication with password."""
+        errors: dict[str, str] = {}
+        if user_input is not None:
+            self._password = user_input[CONF_PASSWORD].strip()
+            if self._api:
+                await self._api.close()
+            self._api = GenesisEnergyApi(self._email, self._password)
+
+            try:
+                res = await self._api.async_start_login()
+                if res == "MFA_REQUIRED":
+                    return await self.async_step_mfa()
+
+                _LOGGER.info("Re-auth: authentication successful.")
+                entry = self.hass.config_entries.async_get_entry(self.context["entry_id"])
+                if entry:
+                    self.hass.config_entries.async_update_entry(
+                        entry,
+                        data={
+                            **entry.data,
+                            CONF_PASSWORD: self._password,
+                            CONF_REFRESH_TOKEN: self._api.refresh_token,
+                            CONF_ACCESS_TOKEN: self._api.access_token,
+                            CONF_TOKEN_EXPIRY: self._api.token_expiry,
+                        },
+                    )
+                    await self.hass.config_entries.async_reload(entry.entry_id)
+                await self._api.close()
+                return self.async_abort(reason="reauth_successful")
+
+            except InvalidAuth:
+                await self._api.close()
+                errors["base"] = "invalid_auth"
+            except CannotConnect:
+                await self._api.close()
+                errors["base"] = "cannot_connect"
+            except Exception as e:
+                await self._api.close()
+                _LOGGER.exception("Reauth exception: %s", e)
+                errors["base"] = "unknown"
+
+        return self.async_show_form(
+            step_id="reauth_confirm",
+            data_schema=vol.Schema({
+                vol.Required(CONF_PASSWORD): cv.string,
+            }),
+            description_placeholders={"email": self._email or "your Genesis account"},
             errors=errors,
         )
 

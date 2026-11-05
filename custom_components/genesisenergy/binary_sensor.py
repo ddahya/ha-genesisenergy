@@ -19,6 +19,7 @@ from .const import (
     DEFAULT_POWERSHOUT_POLL_MINUTES,
 )
 from .coordinator import GenesisEnergyDataUpdateCoordinator
+from .exceptions import InvalidAuth
 
 
 def _all_bookings(coordinator: GenesisEnergyDataUpdateCoordinator) -> list[dict[str, Any]]:
@@ -151,6 +152,10 @@ class PowerShoutBookingInProgressBinarySensor(
                 bal_data = await self.coordinator.api.get_powershout_balance()
                 if isinstance(bal_data, dict):
                     self.coordinator.data[DATA_API_POWERSHOUT_BALANCE] = bal_data
+        except InvalidAuth as err:
+            LOGGER.warning("Authentication failed while refreshing bookings: %s", err)
+            await self.coordinator.async_request_refresh()
+            return
         except Exception as err:
             LOGGER.debug("Could not refresh bookings for in-progress sensor: %s", err)
 

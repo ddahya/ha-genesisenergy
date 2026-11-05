@@ -4,6 +4,7 @@ from typing import TYPE_CHECKING, Any, Iterable
 
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
+from homeassistant.exceptions import ConfigEntryAuthFailed
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
 from homeassistant.helpers.device_registry import DeviceInfo
 from homeassistant.helpers.storage import Store
@@ -218,7 +219,9 @@ class GenesisEnergyDataUpdateCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             data = await self._async_fetch_all_data()
             self.hass.async_create_task(self.async_prefetch_current_year_usage())
             return data
-        except (InvalidAuth, CannotConnect, ApiError) as err:
+        except InvalidAuth as err:
+            raise ConfigEntryAuthFailed(f"Authentication failed: {err}") from err
+        except (CannotConnect, ApiError) as err:
             raise UpdateFailed(f"Error communicating with API: {err}") from err
         except Exception as err:
             raise UpdateFailed(f"Unexpected error updating data: {err}") from err

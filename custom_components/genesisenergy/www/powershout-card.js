@@ -63,14 +63,14 @@ function fmtDate(isoStr) {
 function fmtPastHour(isoStr) {
   if (!isoStr) return "Unknown hour";
   const parsed = new Date(isoStr);
-  if (isNaN(parsed)) return isoStr.replace("T", " ");
-  return parsed.toLocaleString([], {
+  if (isNaN(parsed)) return escapeHtml(isoStr.replace("T", " "));
+  return escapeHtml(parsed.toLocaleString([], {
     weekday: "short",
     day: "numeric",
     month: "short",
     hour: "numeric",
     minute: "2-digit",
-  });
+  }));
 }
 
 function fmtDisplayDate(dateStr) {
@@ -2559,7 +2559,7 @@ class GenesisPowerShoutCard extends HTMLElement {
         const offerGuid = o.loyaltyOffer?.guid || o.id;
         const offerAmount = o.loyaltyOffer?.amount || o.amount || 1;
         this._offerId = offerGuid;
-        this._el("offer-lbl").innerHTML = `🎁 <b>+${offerAmount} hr</b> Power Shout offer for you`;
+        this._el("offer-lbl").innerHTML = `🎁 <b>+${escapeHtml(offerAmount)} hr</b> Power Shout offer for you`;
         offerRow.removeAttribute("hidden");
       } else {
         offerRow.setAttribute("hidden", "");
@@ -2850,7 +2850,7 @@ class GenesisPowerShoutCard extends HTMLElement {
             <input type="checkbox" id="hour-${idx}" data-start="${escapeHtml(item.start_datetime)}"${checked}>
             <label for="hour-${idx}">
               <span class="when">${escapeHtml(item.day)} · ${escapeHtml(item.time)}</span>
-              <small>${item.kwh} kWh · <b>$${item.cost}</b> back</small>
+              <small>${escapeHtml(item.kwh)} kWh · <b>$${escapeHtml(item.cost)}</b> back</small>
             </label>
             ${badge}
           </div>`;
@@ -3693,7 +3693,7 @@ class GenesisPowerShoutCard extends HTMLElement {
       const title = (billSum.totalAmountTitles && billSum.totalAmountTitles[0]) || "Amount due";
       const amount = fmtNum(billSum.totalAmountNzd, 2);
 
-      let desc = billSum.description || "";
+      let desc = escapeHtml(billSum.description || "");
       const subs = billSum.descriptionSubstrings || [];
       subs.forEach((s, idx) => {
         const text = s.text || "";

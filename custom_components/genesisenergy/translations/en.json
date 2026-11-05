@@ -1,7 +1,8 @@
 {
     "config": {
         "abort": {
-            "already_configured": "Account is already configured"
+            "already_configured": "Account is already configured",
+            "reauth_successful": "Re-authentication was successful"
         },
         "error": {
             "cannot_connect": "Failed to connect",
@@ -22,6 +23,13 @@
                 "description": "Enter the 6-digit verification code sent to {email}.",
                 "data": {
                     "verification_code": "Verification Code"
+                }
+            },
+            "reauth_confirm": {
+                "title": "Re-authenticate with Genesis Energy",
+                "description": "Please enter your password for {email}.",
+                "data": {
+                    "password": "Password"
                 }
             }
         }

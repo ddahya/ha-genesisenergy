@@ -57,10 +57,21 @@ class GenesisEnergyApi:
         self._token_update_callback = token_update_callback
         self._code_verifier: str | None = None
         self._mfa_context: dict[str, Any] = {}
+        self._auth_failed: bool = False
 
         remaining_mins = int((self._access_token_absolute_expiry_ts - datetime.now(timezone.utc).timestamp()) / 60)
         if self._token and remaining_mins > self.TOKEN_VALIDITY_BUFFER_MINUTES:
             _LOGGER.debug("Restored valid access token from storage (expires in ~%d mins). ✅", remaining_mins)
+
+    def reset_auth_failure(self) -> None:
+        """Reset authentication failure flag."""
+        self._auth_failed = False
+
+    def update_credentials(self, email: str, password: str) -> None:
+        """Update credentials and clear auth failure flag."""
+        self._email = email
+        self._password = password
+        self._auth_failed = False
 
     @property
     def refresh_token(self) -> str | None:
@@ -325,11 +336,17 @@ class GenesisEnergyApi:
             raise CannotConnect(f"Network error during token refresh: {e}") from e
 
     async def _ensure_valid_token(self) -> None:
+        if self._auth_failed:
+            raise InvalidAuth("Authentication failed; please re-authenticate in Home Assistant.")
+
         current_time = datetime.now(timezone.utc).timestamp()
         if self._token and self._access_token_absolute_expiry_ts > (current_time + self.TOKEN_VALIDITY_BUFFER_MINUTES * 60):
             return
 
         async with self._lock:
+            if self._auth_failed:
+                raise InvalidAuth("Authentication failed; please re-authenticate in Home Assistant.")
+
             if self._token and self._access_token_absolute_expiry_ts > (datetime.now(timezone.utc).timestamp() + self.TOKEN_VALIDITY_BUFFER_MINUTES * 60):
                 return
 
@@ -337,9 +354,14 @@ class GenesisEnergyApi:
                 if await self._refresh_access_token():
                     return
 
-            res = await self.async_start_login()
-            if res != "SUCCESS":
-                raise InvalidAuth("Login re-authentication required.")
+            try:
+                res = await self.async_start_login()
+                if res != "SUCCESS":
+                    self._auth_failed = True
+                    raise InvalidAuth("Login re-authentication required.")
+            except InvalidAuth:
+                self._auth_failed = True
+                raise
 
     async def _make_api_call(
         self,

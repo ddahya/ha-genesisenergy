@@ -2,7 +2,6 @@
 
 import logging
 from datetime import datetime, date, timedelta, timezone
-from zoneinfo import ZoneInfo
 from typing import Any, Mapping
 import json
 
@@ -444,7 +443,7 @@ class GenesisEnergyStatisticsSensor(CoordinatorEntity[GenesisEnergyDataUpdateCoo
         self._unit = "kWh"
         self._currency = "NZD"
         self._processed_data_hash = None
-        self._utc_tz = ZoneInfo("UTC")
+        self._utc_tz = dt_util.UTC
         self._last_daily_override_date: date | None = None
 
     async def async_added_to_hass(self) -> None:
@@ -597,7 +596,7 @@ class GenerationMixSensor(CoordinatorEntity[GenesisEnergyDataUpdateCoordinator],
         self.entity_description = SensorEntityDescription(key=SENSOR_KEY_GENERATION_MIX, name="Grid Generation Eco-Friendly")
         self._attr_device_info = coordinator.device_info
         self._attr_unique_id = f"{coordinator.config_entry.entry_id}_{self.entity_description.key}"
-        self._nz_tz = ZoneInfo('Pacific/Auckland')
+        self._nz_tz = getattr(coordinator, "nz_tz", None) or dt_util.get_time_zone("Pacific/Auckland")
 
     @property
     def native_value(self) -> float | None:
