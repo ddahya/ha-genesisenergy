@@ -1,6 +1,8 @@
 {
   "name": "Genesis Energy",
   "country": "NZ",
+  "filename": "genesisenergy.zip",
   "homeassistant": "2024.1.0",
-  "render_readme": true
+  "render_readme": true,
+  "zip_release": true
 }
